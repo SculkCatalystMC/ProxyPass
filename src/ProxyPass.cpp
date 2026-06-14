@@ -19,15 +19,81 @@
 #include <sculk/protocol/codec/packet/ClientToServerHandshakePacket.hpp>
 #include <sculk/protocol/codec/packet/DisconnectPacket.hpp>
 #include <sculk/protocol/codec/packet/PlayStatusPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackChunkDataPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackChunkRequestPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackClientResponsePacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackDataInfoPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackStackPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePacksInfoPacket.hpp>
 #include <sculk/protocol/connection/HandShakeToken.hpp>
 
+#include <cstdint>
 #include <print>
+#include <string_view>
 
 namespace sculk {
 
+#ifdef Debug
 #define PROXY_PASS_SHOULD_LOG_PACKET(ID)                                                                               \
     (mSettings.packets_logger->black_list_mode && !mSettings.packets_logger->packet_ids->contains(ID))                 \
         || (!mSettings.packets_logger->black_list_mode && mSettings.packets_logger->packet_ids->contains(ID))
+#else
+#define PROXY_PASS_SHOULD_LOG_PACKET(ID) false
+#endif
+
+#ifdef ResourcePack
+#define PROXY_PASS_LOG_RESOURCE(...) std::println(__VA_ARGS__)
+#else
+#define PROXY_PASS_LOG_RESOURCE(...) ((void)0)
+#endif
+
+namespace {
+
+[[nodiscard]] const char* resourcePackResponseName(std::uint8_t response) noexcept {
+    switch (static_cast<ResourcePackManager::ClientResponse>(response)) {
+    case ResourcePackManager::ClientResponse::Refused:
+        return "REFUSED";
+    case ResourcePackManager::ClientResponse::SendPacks:
+        return "SEND_PACKS";
+    case ResourcePackManager::ClientResponse::HaveAllPacks:
+        return "HAVE_ALL_PACKS";
+    case ResourcePackManager::ClientResponse::Completed:
+        return "COMPLETED";
+    }
+    return "UNKNOWN";
+}
+
+void logResourceState(std::string_view event, const ProxyBridge& bridge) {
+#ifdef ResourcePack
+    const auto& session = bridge.mResourcePackSession;
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack][{}] {} | clientInfoSent={}, clientRequestedTransfer={}, "
+        "clientHasAllPacks={}, clientCompleted={}, clientRefused={}, upstreamInfoReceived={}, "
+        "upstreamHaveAllPacksSent={}, upstreamStackReceived={}, upstreamCompletedSent={}, "
+        "clientLoginSuccessSent={}, "
+        "pendingClientPacks={}, queuedServerPackets={}",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        event,
+        session.clientInfoSent,
+        session.clientRequestedTransfer,
+        session.clientHasAllPacks,
+        session.clientCompleted,
+        session.clientRefused,
+        session.upstreamInfoReceived,
+        session.upstreamHaveAllPacksSent,
+        session.upstreamStackReceived,
+        session.upstreamCompletedSent,
+        session.clientLoginSuccessSent,
+        session.pendingClientPacks.size(),
+        bridge.mQueuedServerPackets.size()
+    );
+#else
+    (void)event;
+    (void)bridge;
+#endif
+}
+
+} // namespace
 
 ProxyPass::ProxyPass(protocol::AuthenticationKeyManager const& authManager, ProxySettings& settings)
 : mProxyServer(1),
@@ -35,6 +101,17 @@ ProxyPass::ProxyPass(protocol::AuthenticationKeyManager const& authManager, Prox
   mSettings(settings) {}
 
 bool ProxyPass::start() {
+    if (!mResourcePackManager.initialize()) {
+        return false;
+    }
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack] Manager initialized. clientOverrideEnabled={}, proxyResourcePacks={}, "
+        "proxyResourcePackRequired={}",
+        mResourcePackManager.hasClientOverride(),
+        mResourcePackManager.clientResourcePackCount(),
+        mResourcePackManager.clientResourcePackRequired()
+    );
+
     auto serverKeyPair = protocol::ssl::randomES384KeyPair();
     if (!serverKeyPair) {
         return false;
@@ -138,7 +215,14 @@ void ProxyPass::processClientPacket(ProxyBridge& bridge, const protocol::IPacket
             }
         }
         bridge.mClientReady.store(true, std::memory_order_release);
+        logResourceState("client handshake completed; waiting for server LoginSuccess before client/proxy resource-pack exchange", bridge);
         break;
+    }
+    case protocol::MinecraftPacketIds::ResourcePackClientResponse: {
+        return handleClient(bridge, static_cast<const protocol::ResourcePackClientResponsePacket&>(packet));
+    }
+    case protocol::MinecraftPacketIds::ResourcePackChunkRequest: {
+        return handleClient(bridge, static_cast<const protocol::ResourcePackChunkRequestPacket&>(packet));
     }
     default: {
         if (PROXY_PASS_SHOULD_LOG_PACKET(id)) {
@@ -248,6 +332,117 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::LoginPacket& p
     );
 }
 
+void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackClientResponsePacket& packet) {
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackClientResponse)) {
+        std::println("[ProxyPass] Client => Proxy | {}", packet);
+    }
+
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack][{}] Client => Proxy response={}, requestedPacks={}, "
+        "rawResponse={}, clientOverrideEnabled={}, upstreamInfoReceived={}, upstreamStackReceived={}",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        resourcePackResponseName(packet.mResponse),
+        packet.mPackIds.size(),
+        packet.mResponse,
+        mResourcePackManager.hasClientOverride(),
+        bridge.mResourcePackSession.upstreamInfoReceived,
+        bridge.mResourcePackSession.upstreamStackReceived
+    );
+
+    mResourcePackManager.noteClientResponse(bridge.mResourcePackSession, packet);
+    logResourceState("client response recorded", bridge);
+    if (!mResourcePackManager.hasClientOverride()) {
+        bridge.sendPacketToServer(packet);
+        if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackClientResponse)) {
+            std::println("[ProxyPass] Proxy => Server | {}", packet);
+        }
+        return;
+    }
+
+    switch (static_cast<ResourcePackManager::ClientResponse>(packet.mResponse)) {
+    case ResourcePackManager::ClientResponse::Refused: {
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Client refused required proxy packs; disconnecting downstream without forwarding REFUSED upstream.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name
+        );
+        return disconnectClient(
+            bridge.mRealGuid,
+            "Client refused required proxy resource packs",
+            protocol::DisconnectFailReason::ResourcePackProblem
+        );
+    }
+    case ResourcePackManager::ClientResponse::SendPacks: {
+        auto response = mResourcePackManager.makeClientResponse(ResourcePackManager::ClientResponse::SendPacks);
+        bridge.mResourcePackSession.pendingClientPacks = std::move(response.mPackIds);
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Client requested proxy packs. pendingClientPacks={}",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            bridge.mResourcePackSession.pendingClientPacks.size()
+        );
+        sendNextClientResourcePackInfo(bridge);
+        return;
+    }
+    case ResourcePackManager::ClientResponse::HaveAllPacks:
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Client reports all proxy pack chunks downloaded; sending proxy ResourcePackStack.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name
+        );
+        bridge.sendPacketToClient(mResourcePackManager.clientStackPacket());
+        if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackStack)) {
+            std::println("[ProxyPass] Proxy => Client | {}", mResourcePackManager.clientStackPacket());
+        }
+        return;
+    case ResourcePackManager::ClientResponse::Completed: {
+        logResourceState("client completed proxy resource-pack application", bridge);
+        completeUpstreamResourcePackIfReady(bridge);
+        return;
+    }
+    }
+}
+
+void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackChunkRequestPacket& packet) {
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackChunkRequest)) {
+        std::println("[ProxyPass] Client => Proxy | {}", packet);
+    }
+
+    if (auto cachedChunk = mResourcePackManager.findClientChunk(packet)) {
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Client requested chunk resource={}, index={} -> cache hit, bytes={}, offset={}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            packet.mResourceName,
+            packet.mChunkIndex,
+            cachedChunk->mChunkData.size(),
+            cachedChunk->mBytesOffset
+        );
+        bridge.sendPacketToClient(*cachedChunk);
+        if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackChunkData)) {
+            std::println("[ProxyPass] Proxy => Client | {}", *cachedChunk);
+        }
+        const auto& sendingPack = bridge.mResourcePackSession.sendingClientPack;
+        if (sendingPack && packet.mResourceName == sendingPack->mResourceName
+            && packet.mChunkIndex + 1U >= sendingPack->mChunkIndex) {
+            PROXY_PASS_LOG_RESOURCE(
+                "[ProxyPass][ResourcePack][{}] Last chunk requested for resource={}; moving to next proxy pack.",
+                bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+                packet.mResourceName
+            );
+            sendNextClientResourcePackInfo(bridge);
+        }
+        return;
+    }
+
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack][{}] Client requested unknown/local-missing chunk resource={}, index={}; forwarding to upstream fallback.",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        packet.mResourceName,
+        packet.mChunkIndex
+    );
+    bridge.sendPacketToServer(packet);
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackChunkRequest)) {
+        std::println("[ProxyPass] Proxy => Server | {}", packet);
+    }
+}
+
 void ProxyPass::handleFirstClientPacket(
     const RakNet::RakNetGUID&    guid,
     const RakNet::SystemAddress& address,
@@ -278,7 +473,10 @@ void ProxyPass::handleFirstClientPacket(
             return;
         }
 
+        logResourceState("upstream transport connected", *currentBridge);
+
         if (!currentBridge->mClientReady.load(std::memory_order_acquire)) {
+            logResourceState("upstream connected before client handshake; waiting before requesting network settings", *currentBridge);
             return;
         }
 
@@ -289,6 +487,7 @@ void ProxyPass::handleFirstClientPacket(
         }
 
         currentBridge->mClientReady.store(true, std::memory_order_release);
+        logResourceState("upstream network settings requested after delayed connection", *currentBridge);
     });
 
     bridge->mProxyClient.setOnConnectionFailed([this, weakBridge]() noexcept {
@@ -363,11 +562,28 @@ void ProxyPass::processServerPacket(ProxyBridge& bridge, const protocol::IPacket
         handleServer(bridge, static_cast<const protocol::ServerToClientHandshakePacket&>(packet));
         break;
     }
+    case protocol::MinecraftPacketIds::PlayStatus: {
+        handleServer(bridge, static_cast<const protocol::PlayStatusPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::ResourcePacksInfo: {
+        handleServer(bridge, static_cast<const protocol::ResourcePacksInfoPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::ResourcePackStack: {
+        handleServer(bridge, static_cast<const protocol::ResourcePackStackPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::ResourcePackDataInfo: {
+        handleServer(bridge, static_cast<const protocol::ResourcePackDataInfoPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::ResourcePackChunkData: {
+        handleServer(bridge, static_cast<const protocol::ResourcePackChunkDataPacket&>(packet));
+        break;
+    }
     default: {
-        if (PROXY_PASS_SHOULD_LOG_PACKET(id)) {
-            std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
-        }
-        bridge.sendPacketToClient(packet);
+        forwardOrQueueServerPacket(bridge, packet);
         break;
     }
     }
@@ -433,6 +649,259 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ServerToClient
     if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ClientToServerHandshake)) {
         std::println("[ProxyPass] Proxy => Server | {}", handshakePacket);
     }
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::PlayStatusPacket& packet) {
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::PlayStatus)) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    bridge.sendPacketToClient(packet);
+
+    if (packet.mStatus == protocol::PlayStatus::LoginSuccess) {
+        bridge.mResourcePackSession.clientLoginSuccessSent = true;
+        logResourceState("server LoginSuccess forwarded; trying to start client/proxy resource-pack exchange", bridge);
+        startClientResourcePackHandshake(bridge);
+    } else {
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Server => Client PlayStatus forwarded before barrier: status={}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            static_cast<int>(packet.mStatus)
+        );
+    }
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePacksInfoPacket& packet) {
+    mResourcePackManager.captureUpstream(bridge.mResourcePackSession, packet);
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePacksInfo: upstreamResourcePacks={}, "
+        "required={}, hasAddonPacks={}, hasScripts={}, vibrantVisualsForceDisabled={}, "
+        "worldTemplateVersion='{}', clientOverrideEnabled={}.",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        packet.mResourcePacks.size(),
+        packet.mResourcePackRequired,
+        packet.mHasAddonPacks,
+        packet.mHasScripts,
+        packet.mIsVibrantVisualsForceDisabled,
+        packet.mWorldTemplateVersion,
+        mResourcePackManager.hasClientOverride()
+    );
+    logResourceState("upstream resource-pack info captured", bridge);
+    if (mResourcePackManager.hasClientOverride()) {
+        auto haveAll = mResourcePackManager.makeUpstreamResponse(ResourcePackManager::ClientResponse::HaveAllPacks);
+        bridge.mResourcePackSession.upstreamHaveAllPacksSent = true;
+        bridge.sendPacketToServer(haveAll);
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Proxy => Server HAVE_ALL_PACKS; upstream packs are not downloaded by proxy.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name
+        );
+        if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackClientResponse)) {
+            std::println("[ProxyPass] Proxy => Server | {}", haveAll);
+        }
+
+        startClientResourcePackHandshake(bridge);
+        return;
+    }
+
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePacksInfo)) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    bridge.sendPacketToClient(packet);
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePackStackPacket& packet) {
+    mResourcePackManager.captureUpstream(bridge.mResourcePackSession, packet);
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackStack captured: texturePackRequired={}, "
+        "texturePacks={}, addonPacks={}, baseGameVersion='{}', includeEditorPacks={}; attempting upstream completion.",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        packet.mTexturePackRequired,
+        packet.mTexturePackList.size(),
+        packet.mAddonList.size(),
+        packet.mBaseGameVersion,
+        packet.mIncludeEditorPacks
+    );
+    logResourceState("upstream resource-pack stack captured", bridge);
+    if (mResourcePackManager.hasClientOverride()) {
+        completeUpstreamResourcePackIfReady(bridge);
+        return;
+    }
+
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackStack)) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    bridge.sendPacketToClient(packet);
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePackDataInfoPacket& packet) {
+    mResourcePackManager.captureUpstream(packet);
+    if (mResourcePackManager.hasClientOverride()) {
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackDataInfo ignored in override mode: resource={}, chunks={}, fileSize={}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            packet.mResourceName,
+            packet.mChunkIndex,
+            packet.mFileSize
+        );
+        return;
+    }
+
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackDataInfo)) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    bridge.sendPacketToClient(packet);
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePackChunkDataPacket& packet) {
+    mResourcePackManager.captureUpstream(packet);
+    if (mResourcePackManager.hasClientOverride()) {
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackChunkData ignored in override mode: resource={}, index={}, bytes={}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            packet.mResourceName,
+            packet.mChunkIndex,
+            packet.mChunkData.size()
+        );
+        return;
+    }
+
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackChunkData)) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    bridge.sendPacketToClient(packet);
+}
+
+void ProxyPass::startClientResourcePackHandshake(ProxyBridge& bridge) {
+    if (!mResourcePackManager.hasClientOverride() || bridge.mResourcePackSession.clientInfoSent) {
+        if (!mResourcePackManager.hasClientOverride()) {
+            logResourceState("client resource-pack handshake skipped because override is disabled", bridge);
+        } else {
+            logResourceState("client resource-pack info already sent; skipping duplicate send", bridge);
+        }
+        return;
+    }
+    if (!bridge.mResourcePackSession.clientLoginSuccessSent) {
+        logResourceState("client resource-pack handshake deferred until server LoginSuccess is forwarded", bridge);
+        return;
+    }
+
+    const auto& clientInfo = mResourcePackManager.clientInfoPacket();
+    bridge.mResourcePackSession.clientInfoSent = true;
+    PROXY_PASS_LOG_RESOURCE(
+        "[ProxyPass][ResourcePack][{}] Proxy => Client ResourcePacksInfo: proxyResourcePacks={}, "
+        "required={}, hasAddonPacks={}, hasScripts={}, vibrantVisualsForceDisabled={}, worldTemplateVersion='{}'.",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        clientInfo.mResourcePacks.size(),
+        clientInfo.mResourcePackRequired,
+        clientInfo.mHasAddonPacks,
+        clientInfo.mHasScripts,
+        clientInfo.mIsVibrantVisualsForceDisabled,
+        clientInfo.mWorldTemplateVersion
+    );
+    bridge.sendPacketToClient(clientInfo);
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePacksInfo)) {
+        std::println("[ProxyPass] Proxy => Client | {}", clientInfo);
+    }
+}
+
+void ProxyPass::sendNextClientResourcePackInfo(ProxyBridge& bridge) {
+    auto& session = bridge.mResourcePackSession;
+    while (!session.pendingClientPacks.empty()) {
+        auto resourceName = std::move(session.pendingClientPacks.front());
+        session.pendingClientPacks.erase(session.pendingClientPacks.begin());
+        if (auto dataInfo = mResourcePackManager.findClientDataInfo(resourceName)) {
+            session.sendingClientPack = *dataInfo;
+            PROXY_PASS_LOG_RESOURCE(
+                "[ProxyPass][ResourcePack][{}] Proxy => Client ResourcePackDataInfo: resource={}, chunks={}, "
+                "chunkSize={}, fileSize={}, pendingAfterThis={}.",
+                bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+                dataInfo->mResourceName,
+                dataInfo->mChunkIndex,
+                dataInfo->mChunkSize,
+                dataInfo->mFileSize,
+                session.pendingClientPacks.size()
+            );
+            bridge.sendPacketToClient(*dataInfo);
+            if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackDataInfo)) {
+                std::println("[ProxyPass] Proxy => Client | {}", *dataInfo);
+            }
+            return;
+        }
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Client requested resource pack not found in proxy cache: {}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            resourceName
+        );
+    }
+    session.sendingClientPack.reset();
+    logResourceState("all requested proxy ResourcePackDataInfo packets have been sent", bridge);
+}
+
+void ProxyPass::completeUpstreamResourcePackIfReady(ProxyBridge& bridge) {
+    auto& session = bridge.mResourcePackSession;
+    if (!mResourcePackManager.hasClientOverride()) {
+        return;
+    }
+
+    if (!session.upstreamStackReceived) {
+        logResourceState("upstream completion deferred because ResourcePackStack has not arrived", bridge);
+        return;
+    }
+
+    if (!session.upstreamCompletedSent) {
+        auto completed = mResourcePackManager.makeUpstreamResponse(ResourcePackManager::ClientResponse::Completed);
+        session.upstreamCompletedSent = true;
+        bridge.sendPacketToServer(completed);
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Proxy => Server COMPLETED.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name
+        );
+        if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackClientResponse)) {
+            std::println("[ProxyPass] Proxy => Server | {}", completed);
+        }
+    } else {
+        logResourceState("upstream completion already sent; checking barrier for queued packet flush", bridge);
+    }
+
+    if (resourcePackBarrierSatisfied(bridge)) {
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Barrier satisfied; flushing queued server packets: count={}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            bridge.mQueuedServerPackets.size()
+        );
+        bridge.flushQueuedPacketsToClient();
+    } else {
+        logResourceState("resource-pack barrier not yet satisfied; queued server packets remain held", bridge);
+    }
+}
+
+bool ProxyPass::resourcePackBarrierSatisfied(const ProxyBridge& bridge) const {
+    if (!mResourcePackManager.hasClientOverride()) {
+        return true;
+    }
+
+    const auto& session = bridge.mResourcePackSession;
+    return session.clientCompleted && session.upstreamCompletedSent;
+}
+
+void ProxyPass::forwardOrQueueServerPacket(ProxyBridge& bridge, const protocol::IPacket& packet) {
+    if (!resourcePackBarrierSatisfied(bridge)) {
+        bridge.queuePacketToClient(packet);
+        PROXY_PASS_LOG_RESOURCE(
+            "[ProxyPass][ResourcePack][{}] Queued server packet id={} until barrier is satisfied. queuedServerPackets={}.",
+            bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+            static_cast<int>(packet.getId()),
+            bridge.mQueuedServerPackets.size()
+        );
+        if (PROXY_PASS_SHOULD_LOG_PACKET(packet.getId())) {
+            std::println("[ProxyPass] Server => Proxy queued until ResourcePack is complete | {}", packet);
+        }
+        return;
+    }
+
+    if (PROXY_PASS_SHOULD_LOG_PACKET(packet.getId())) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    bridge.sendPacketToClient(packet);
 }
 
 } // namespace sculk

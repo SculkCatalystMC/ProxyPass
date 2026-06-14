@@ -14,6 +14,8 @@
 //
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#pragma once
+#include "Feature/ResourcePackManager.hpp"
 #include "ProxyBridge.hpp"
 #include "ProxySettings.hpp"
 #include <parallel_hashmap/phmap.h>
@@ -22,6 +24,13 @@
 #include <sculk/protocol/codec/actor/player/PlayStatus.hpp>
 #include <sculk/protocol/codec/packet/LoginPacket.hpp>
 #include <sculk/protocol/codec/packet/NetworkSettingsPacket.hpp>
+#include <sculk/protocol/codec/packet/PlayStatusPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackChunkDataPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackChunkRequestPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackClientResponsePacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackDataInfoPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePackStackPacket.hpp>
+#include <sculk/protocol/codec/packet/ResourcePacksInfoPacket.hpp>
 #include <sculk/protocol/codec/packet/RequestNetworkSettingsPacket.hpp>
 #include <sculk/protocol/codec/packet/ServerToClientHandshakePacket.hpp>
 #include <sculk/protocol/connection/ServerNetworkSystem.hpp>
@@ -36,6 +45,7 @@ class ProxyPass {
     const protocol::AuthenticationKeyManager&                                    mAuthManager;
     protocol::PemKeyPair                                                         mProxyServerKeyPair{};
     ProxySettings&                                                               mSettings;
+    ResourcePackManager                                                          mResourcePackManager{};
 
 public:
     ProxyPass(protocol::AuthenticationKeyManager const& authManager, ProxySettings& settings);
@@ -54,9 +64,21 @@ private:
     void processClientPacket(ProxyBridge&, const protocol::IPacket&);
     void handleClient(protocol::Session&, const protocol::RequestNetworkSettingsPacket&);
     void handleClient(ProxyBridge&, const protocol::LoginPacket&);
+    void handleClient(ProxyBridge&, const protocol::ResourcePackClientResponsePacket&);
+    void handleClient(ProxyBridge&, const protocol::ResourcePackChunkRequestPacket&);
     void processServerPacket(ProxyBridge&, const protocol::IPacket&);
     void handleServer(ProxyBridge&, const protocol::NetworkSettingsPacket&);
     void handleServer(ProxyBridge&, const protocol::ServerToClientHandshakePacket&);
+    void handleServer(ProxyBridge&, const protocol::PlayStatusPacket&);
+    void handleServer(ProxyBridge&, const protocol::ResourcePacksInfoPacket&);
+    void handleServer(ProxyBridge&, const protocol::ResourcePackStackPacket&);
+    void handleServer(ProxyBridge&, const protocol::ResourcePackDataInfoPacket&);
+    void handleServer(ProxyBridge&, const protocol::ResourcePackChunkDataPacket&);
+    void startClientResourcePackHandshake(ProxyBridge&);
+    void sendNextClientResourcePackInfo(ProxyBridge&);
+    void completeUpstreamResourcePackIfReady(ProxyBridge&);
+    bool resourcePackBarrierSatisfied(const ProxyBridge&) const;
+    void forwardOrQueueServerPacket(ProxyBridge&, const protocol::IPacket&);
     void disconnectClient(const RakNet::RakNetGUID&, protocol::PlayStatus);
     void disconnectClient(const RakNet::RakNetGUID&, std::string_view, protocol::DisconnectFailReason);
 };

@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "vs2026-nmake",
+      "displayName": "VS2026 NMake",
+      "description": "Run from a VS2026 developer shell, or prefix commands with: call D:\\VS2026\\VC\\Auxiliary\\Build\\vcvars64.bat &&",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/out/vs2026-nmake",
+      "environment": {
+        "PATH": "C:\\Program Files\\Git\\usr\\bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "ninja-clang",
+      "displayName": "Ninja Clang",
+      "description": "Requires a Clang version compatible with the active MSVC STL. VS2026 STL needs Clang 20 or newer.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/ninja-clang",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2026-nmake",
+      "configurePreset": "vs2026-nmake"
+    },
+    {
+      "name": "ninja-clang",
+      "configurePreset": "ninja-clang"
+    }
+  ]
+}

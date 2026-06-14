@@ -15,9 +15,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
+#include "Feature/ResourcePackManager.hpp"
 #include <atomic>
 #include <sculk/protocol/auth/ConnectionRequest.hpp>
 #include <sculk/protocol/connection/ClientNetworkSystem.hpp>
+#include <vector>
 
 namespace sculk {
 
@@ -36,7 +38,9 @@ public:
     protocol::Session&            mRealClientSession;
     protocol::ConnectionRequest   mConnectionRequest{};
     ClientInfo                    mClientInfo{};
+    ResourcePackManager::Session  mResourcePackSession{};
     std::atomic_bool              mClientReady{false};
+    std::vector<protocol::Session::Buffer> mQueuedServerPackets{};
 
 public:
     explicit ProxyBridge(
@@ -48,6 +52,9 @@ public:
     ~ProxyBridge();
 
     bool sendPacketToClient(const protocol::IPacket& packet, bool immediate = false);
+    bool sendBufferToClient(protocol::Session::Buffer&& buffer, bool immediate = false);
+    void queuePacketToClient(const protocol::IPacket& packet);
+    void flushQueuedPacketsToClient();
 
     bool sendPacketToServer(const protocol::IPacket& packet, bool immediate = false);
 };

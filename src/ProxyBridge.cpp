@@ -27,7 +27,9 @@ ProxyBridge::ProxyBridge(
   mRealAddress(address),
   mProxyClient(1),
   mRealClientSession(realClientSession),
-  mClientReady(false) {}
+  mClientReady(false) {
+    mResourcePackSession = {};
+}
 
 ProxyBridge::~ProxyBridge() {
     if (mProxyClient.isConnected()) {
@@ -39,10 +41,29 @@ bool ProxyBridge::sendPacketToClient(const protocol::IPacket& packet, bool immed
     protocol::Session::Buffer buffer{};
     protocol::BinaryStream    stream{buffer};
     packet.writeWithHeader(stream);
+    return sendBufferToClient(std::move(buffer), immediate);
+}
+
+bool ProxyBridge::sendBufferToClient(protocol::Session::Buffer&& buffer, bool immediate) {
     if (immediate) {
         return mRealClientSession.sendPacketImmediately(std::move(buffer));
     }
     return mRealClientSession.sendPacket(std::move(buffer));
+}
+
+void ProxyBridge::queuePacketToClient(const protocol::IPacket& packet) {
+    protocol::Session::Buffer buffer{};
+    protocol::BinaryStream    stream{buffer};
+    packet.writeWithHeader(stream);
+    mQueuedServerPackets.emplace_back(std::move(buffer));
+}
+
+void ProxyBridge::flushQueuedPacketsToClient() {
+    auto queuedPackets = std::move(mQueuedServerPackets);
+    mQueuedServerPackets.clear();
+    for (auto& buffer : queuedPackets) {
+        sendBufferToClient(std::move(buffer));
+    }
 }
 
 bool ProxyBridge::sendPacketToServer(const protocol::IPacket& packet, bool immediate) {

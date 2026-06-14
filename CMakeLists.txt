@@ -61,6 +61,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	Protocol::Protocol
 	reflection::reflection
+	jsonc::jsonc
+	zlibstatic
 )
 
 target_include_directories(${PROJECT_NAME}
