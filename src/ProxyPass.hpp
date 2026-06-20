@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #pragma once
+#include "Feature/CommandManager.hpp"
 #include "Feature/ResourcePackManager.hpp"
 #include "ProxyBridge.hpp"
 #include "ProxySettings.hpp"
@@ -22,8 +23,12 @@
 #include <sculk/protocol/auth/AuthenticationKeyManager.hpp>
 #include <sculk/protocol/codec/actor/player/DisconnectFailReason.hpp>
 #include <sculk/protocol/codec/actor/player/PlayStatus.hpp>
+#include <sculk/protocol/codec/packet/AvailableCommandsPacket.hpp>
+#include <sculk/protocol/codec/packet/CommandOutputPacket.hpp>
+#include <sculk/protocol/codec/packet/CommandRequestPacket.hpp>
 #include <sculk/protocol/codec/packet/LoginPacket.hpp>
 #include <sculk/protocol/codec/packet/NetworkSettingsPacket.hpp>
+#include <sculk/protocol/codec/packet/PlayerListPacket.hpp>
 #include <sculk/protocol/codec/packet/PlayStatusPacket.hpp>
 #include <sculk/protocol/codec/packet/ResourcePackChunkDataPacket.hpp>
 #include <sculk/protocol/codec/packet/ResourcePackChunkRequestPacket.hpp>
@@ -46,6 +51,7 @@ class ProxyPass {
     protocol::PemKeyPair                                                         mProxyServerKeyPair{};
     ProxySettings&                                                               mSettings;
     ResourcePackManager                                                          mResourcePackManager{};
+    CommandManager                                                               mCommandManager{};
 
 public:
     ProxyPass(protocol::AuthenticationKeyManager const& authManager, ProxySettings& settings);
@@ -66,6 +72,7 @@ private:
     void handleClient(ProxyBridge&, const protocol::LoginPacket&);
     void handleClient(ProxyBridge&, const protocol::ResourcePackClientResponsePacket&);
     void handleClient(ProxyBridge&, const protocol::ResourcePackChunkRequestPacket&);
+    void handleClient(ProxyBridge&, const protocol::CommandRequestPacket&);
     void processServerPacket(ProxyBridge&, const protocol::IPacket&);
     void handleServer(ProxyBridge&, const protocol::NetworkSettingsPacket&);
     void handleServer(ProxyBridge&, const protocol::ServerToClientHandshakePacket&);
@@ -74,6 +81,9 @@ private:
     void handleServer(ProxyBridge&, const protocol::ResourcePackStackPacket&);
     void handleServer(ProxyBridge&, const protocol::ResourcePackDataInfoPacket&);
     void handleServer(ProxyBridge&, const protocol::ResourcePackChunkDataPacket&);
+    void handleServer(ProxyBridge&, const protocol::AvailableCommandsPacket&);
+    void handleServer(ProxyBridge&, const protocol::CommandOutputPacket&);
+    void handleServer(ProxyBridge&, const protocol::PlayerListPacket&);
     void startClientResourcePackHandshake(ProxyBridge&);
     void sendNextClientResourcePackInfo(ProxyBridge&);
     void completeUpstreamResourcePackIfReady(ProxyBridge&);

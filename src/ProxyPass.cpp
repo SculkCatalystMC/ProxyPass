@@ -16,9 +16,13 @@
 
 #include "ProxyPass.hpp"
 #include <sculk/protocol/codec/MinecraftPackets.hpp>
+#include <sculk/protocol/codec/packet/AvailableCommandsPacket.hpp>
 #include <sculk/protocol/codec/packet/ClientToServerHandshakePacket.hpp>
+#include <sculk/protocol/codec/packet/CommandOutputPacket.hpp>
+#include <sculk/protocol/codec/packet/CommandRequestPacket.hpp>
 #include <sculk/protocol/codec/packet/DisconnectPacket.hpp>
 #include <sculk/protocol/codec/packet/PlayStatusPacket.hpp>
+#include <sculk/protocol/codec/packet/PlayerListPacket.hpp>
 #include <sculk/protocol/codec/packet/ResourcePackChunkDataPacket.hpp>
 #include <sculk/protocol/codec/packet/ResourcePackChunkRequestPacket.hpp>
 #include <sculk/protocol/codec/packet/ResourcePackClientResponsePacket.hpp>
@@ -102,6 +106,9 @@ ProxyPass::ProxyPass(protocol::AuthenticationKeyManager const& authManager, Prox
 
 bool ProxyPass::start() {
     if (!mResourcePackManager.initialize()) {
+        return false;
+    }
+    if (!mCommandManager.initialize()) {
         return false;
     }
     PROXY_PASS_LOG_RESOURCE(
@@ -215,7 +222,10 @@ void ProxyPass::processClientPacket(ProxyBridge& bridge, const protocol::IPacket
             }
         }
         bridge.mClientReady.store(true, std::memory_order_release);
-        logResourceState("client handshake completed; waiting for server LoginSuccess before client/proxy resource-pack exchange", bridge);
+        logResourceState(
+            "client handshake completed; waiting for server LoginSuccess before client/proxy resource-pack exchange",
+            bridge
+        );
         break;
     }
     case protocol::MinecraftPacketIds::ResourcePackClientResponse: {
@@ -223,6 +233,9 @@ void ProxyPass::processClientPacket(ProxyBridge& bridge, const protocol::IPacket
     }
     case protocol::MinecraftPacketIds::ResourcePackChunkRequest: {
         return handleClient(bridge, static_cast<const protocol::ResourcePackChunkRequestPacket&>(packet));
+    }
+    case protocol::MinecraftPacketIds::CommandRequest: {
+        return handleClient(bridge, static_cast<const protocol::CommandRequestPacket&>(packet));
     }
     default: {
         if (PROXY_PASS_SHOULD_LOG_PACKET(id)) {
@@ -362,7 +375,8 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackCl
     switch (static_cast<ResourcePackManager::ClientResponse>(packet.mResponse)) {
     case ResourcePackManager::ClientResponse::Refused: {
         PROXY_PASS_LOG_RESOURCE(
-            "[ProxyPass][ResourcePack][{}] Client refused required proxy packs; disconnecting downstream without forwarding REFUSED upstream.",
+            "[ProxyPass][ResourcePack][{}] Client refused required proxy packs; disconnecting downstream without "
+            "forwarding REFUSED upstream.",
             bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name
         );
         return disconnectClient(
@@ -384,7 +398,8 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackCl
     }
     case ResourcePackManager::ClientResponse::HaveAllPacks:
         PROXY_PASS_LOG_RESOURCE(
-            "[ProxyPass][ResourcePack][{}] Client reports all proxy pack chunks downloaded; sending proxy ResourcePackStack.",
+            "[ProxyPass][ResourcePack][{}] Client reports all proxy pack chunks downloaded; sending proxy "
+            "ResourcePackStack.",
             bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name
         );
         bridge.sendPacketToClient(mResourcePackManager.clientStackPacket());
@@ -407,7 +422,8 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackCh
 
     if (auto cachedChunk = mResourcePackManager.findClientChunk(packet)) {
         PROXY_PASS_LOG_RESOURCE(
-            "[ProxyPass][ResourcePack][{}] Client requested chunk resource={}, index={} -> cache hit, bytes={}, offset={}.",
+            "[ProxyPass][ResourcePack][{}] Client requested chunk resource={}, index={} -> cache hit, bytes={}, "
+            "offset={}.",
             bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
             packet.mResourceName,
             packet.mChunkIndex,
@@ -432,7 +448,8 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackCh
     }
 
     PROXY_PASS_LOG_RESOURCE(
-        "[ProxyPass][ResourcePack][{}] Client requested unknown/local-missing chunk resource={}, index={}; forwarding to upstream fallback.",
+        "[ProxyPass][ResourcePack][{}] Client requested unknown/local-missing chunk resource={}, index={}; forwarding "
+        "to upstream fallback.",
         bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
         packet.mResourceName,
         packet.mChunkIndex
@@ -441,6 +458,13 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::ResourcePackCh
     if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::ResourcePackChunkRequest)) {
         std::println("[ProxyPass] Proxy => Server | {}", packet);
     }
+}
+
+void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::CommandRequestPacket& packet) {
+    if (mCommandManager.handleRequest(bridge, packet)) {
+        return;
+    }
+    bridge.sendPacketToServer(packet);
 }
 
 void ProxyPass::handleFirstClientPacket(
@@ -476,7 +500,10 @@ void ProxyPass::handleFirstClientPacket(
         logResourceState("upstream transport connected", *currentBridge);
 
         if (!currentBridge->mClientReady.load(std::memory_order_acquire)) {
-            logResourceState("upstream connected before client handshake; waiting before requesting network settings", *currentBridge);
+            logResourceState(
+                "upstream connected before client handshake; waiting before requesting network settings",
+                *currentBridge
+            );
             return;
         }
 
@@ -580,6 +607,18 @@ void ProxyPass::processServerPacket(ProxyBridge& bridge, const protocol::IPacket
     }
     case protocol::MinecraftPacketIds::ResourcePackChunkData: {
         handleServer(bridge, static_cast<const protocol::ResourcePackChunkDataPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::AvailableCommands: {
+        handleServer(bridge, static_cast<const protocol::AvailableCommandsPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::CommandOutput: {
+        handleServer(bridge, static_cast<const protocol::CommandOutputPacket&>(packet));
+        break;
+    }
+    case protocol::MinecraftPacketIds::PlayerList: {
+        handleServer(bridge, static_cast<const protocol::PlayerListPacket&>(packet));
         break;
     }
     default: {
@@ -736,7 +775,8 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePackDa
     mResourcePackManager.captureUpstream(packet);
     if (mResourcePackManager.hasClientOverride()) {
         PROXY_PASS_LOG_RESOURCE(
-            "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackDataInfo ignored in override mode: resource={}, chunks={}, fileSize={}.",
+            "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackDataInfo ignored in override mode: resource={}, "
+            "chunks={}, fileSize={}.",
             bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
             packet.mResourceName,
             packet.mChunkIndex,
@@ -755,7 +795,8 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePackCh
     mResourcePackManager.captureUpstream(packet);
     if (mResourcePackManager.hasClientOverride()) {
         PROXY_PASS_LOG_RESOURCE(
-            "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackChunkData ignored in override mode: resource={}, index={}, bytes={}.",
+            "[ProxyPass][ResourcePack][{}] Server => Proxy ResourcePackChunkData ignored in override mode: "
+            "resource={}, index={}, bytes={}.",
             bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
             packet.mResourceName,
             packet.mChunkIndex,
@@ -768,6 +809,33 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ResourcePackCh
         std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
     }
     bridge.sendPacketToClient(packet);
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::AvailableCommandsPacket& packet) {
+    auto       clientPacket        = packet;
+    const auto before              = clientPacket.mCommands.size();
+    const auto [inserted, skipped] = mCommandManager.injectCommands(clientPacket);
+    std::println(
+        "[ProxyPass][Command][{}] AvailableCommands processed: before={}, after={}, inserted={}, skipped={}",
+        bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
+        before,
+        clientPacket.mCommands.size(),
+        inserted,
+        skipped
+    );
+    forwardOrQueueServerPacket(bridge, clientPacket);
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::CommandOutputPacket& packet) {
+    forwardOrQueueServerPacket(bridge, packet);
+}
+
+void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::PlayerListPacket& packet) {
+    mCommandManager.handlePlayerList(packet);
+    if (PROXY_PASS_SHOULD_LOG_PACKET(protocol::MinecraftPacketIds::PlayerList)) {
+        std::println("[ProxyPass] Server => Proxy => Client | {}", packet);
+    }
+    forwardOrQueueServerPacket(bridge, packet);
 }
 
 void ProxyPass::startClientResourcePackHandshake(ProxyBridge& bridge) {
@@ -784,7 +852,7 @@ void ProxyPass::startClientResourcePackHandshake(ProxyBridge& bridge) {
         return;
     }
 
-    const auto& clientInfo = mResourcePackManager.clientInfoPacket();
+    const auto& clientInfo                     = mResourcePackManager.clientInfoPacket();
     bridge.mResourcePackSession.clientInfoSent = true;
     PROXY_PASS_LOG_RESOURCE(
         "[ProxyPass][ResourcePack][{}] Proxy => Client ResourcePacksInfo: proxyResourcePacks={}, "
@@ -887,7 +955,8 @@ void ProxyPass::forwardOrQueueServerPacket(ProxyBridge& bridge, const protocol::
     if (!resourcePackBarrierSatisfied(bridge)) {
         bridge.queuePacketToClient(packet);
         PROXY_PASS_LOG_RESOURCE(
-            "[ProxyPass][ResourcePack][{}] Queued server packet id={} until barrier is satisfied. queuedServerPackets={}.",
+            "[ProxyPass][ResourcePack][{}] Queued server packet id={} until barrier is satisfied. "
+            "queuedServerPackets={}.",
             bridge.mClientInfo.name.empty() ? "unknown" : bridge.mClientInfo.name,
             static_cast<int>(packet.getId()),
             bridge.mQueuedServerPackets.size()
