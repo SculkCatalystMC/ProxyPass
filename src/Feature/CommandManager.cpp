@@ -9,12 +9,13 @@
 #include "CommandManager.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <optional>
 #include <print>
 #include <sstream>
 #include <stdexcept>
+
 
 namespace sculk {
 
@@ -22,7 +23,9 @@ bool CommandManager::CommandArguments::empty() const noexcept { return mValues.e
 
 std::size_t CommandManager::CommandArguments::size() const noexcept { return mValues.size(); }
 
-CommandManager::CommandArguments::iterator CommandManager::CommandArguments::begin() noexcept { return mValues.begin(); }
+CommandManager::CommandArguments::iterator CommandManager::CommandArguments::begin() noexcept {
+    return mValues.begin();
+}
 
 CommandManager::CommandArguments::iterator CommandManager::CommandArguments::end() noexcept { return mValues.end(); }
 
@@ -69,8 +72,8 @@ void CommandManager::CommandArguments::insert_or_assign(std::string key, Command
 }
 
 CommandManager::CommandOutput::CommandOutput(const protocol::CommandOriginData& originData) {
-    mPacket.mOriginData  = originData;
-    mPacket.mOutputType  = protocol::CommandOutputPacket::Type::AllOutput;
+    mPacket.mOriginData   = originData;
+    mPacket.mOutputType   = protocol::CommandOutputPacket::Type::AllOutput;
     mPacket.mSuccessCount = 0;
 }
 
@@ -100,13 +103,63 @@ bool CommandManager::initialize() {
     return true;
 }
 
+void CommandManager::registerCommand(CommandDefinition command) {
+    command.name = normalizeCommand(command.name);
+    if (command.name.empty()) {
+        return;
+    }
+
+    auto found = std::ranges::find_if(mCommands, [&command](const CommandDefinition& existing) {
+        return existing.name == command.name;
+    });
+    if (found != mCommands.end()) {
+        *found = std::move(command);
+        return;
+    }
+    mCommands.push_back(std::move(command));
+}
+
+void CommandManager::registerOverload(
+    std::string_view   commandName,
+    OverloadDefinition overload,
+    CommandCallback    callback
+) {
+    const auto normalized = normalizeCommand(commandName);
+    auto       found      = std::ranges::find_if(mCommands, [&normalized](const CommandDefinition& existing) {
+        return existing.name == normalized;
+    });
+    if (found == mCommands.end()) {
+        CommandDefinition command{};
+        command.name        = normalized;
+        command.description = "ProxyPass proxy command";
+        command.flags       = CommandFlag{CommandFlag::NotCheat};
+        registerCommand(std::move(command));
+        found = std::ranges::find_if(mCommands, [&normalized](const CommandDefinition& existing) {
+            return existing.name == normalized;
+        });
+        if (found == mCommands.end()) {
+            return;
+        }
+    }
+
+    if (overload.name.empty()) {
+        overload.name = "overload_" + std::to_string(found->overloads.size());
+    }
+    const auto overloadName = overload.name;
+    found->overloads.push_back(std::move(overload));
+    if (callback) {
+        found->callbacks.push_back(CallbackDefinition{overloadName, std::move(callback)});
+    }
+}
+
 std::pair<std::size_t, std::size_t> CommandManager::injectCommands(protocol::AvailableCommandsPacket& packet) const {
     std::size_t inserted{};
     std::size_t skipped{};
     for (const auto& definition : mCommands) {
-        const auto alreadyExists = std::ranges::any_of(packet.mCommands, [&definition](const protocol::CommandData& command) {
-            return command.mName == definition.name;
-        });
+        const auto alreadyExists =
+            std::ranges::any_of(packet.mCommands, [&definition](const protocol::CommandData& command) {
+                return command.mName == definition.name;
+            });
         if (alreadyExists) {
             ++skipped;
             std::println("[ProxyPass][Command] Skipped existing command '/{}'.", definition.name);
@@ -126,18 +179,15 @@ std::pair<std::size_t, std::size_t> CommandManager::injectCommands(protocol::Ava
                 command.mOverloads.push_back(makeOverload(packet, definition, overload));
             }
         }
-        auto insertPosition = std::ranges::lower_bound(
-            packet.mCommands,
-            command.mName,
-            {},
-            &protocol::CommandData::mName
-        );
+        auto insertPosition =
+            std::ranges::lower_bound(packet.mCommands, command.mName, {}, &protocol::CommandData::mName);
         const auto index = static_cast<std::size_t>(std::ranges::distance(packet.mCommands.begin(), insertPosition));
         packet.mCommands.insert(insertPosition, std::move(command));
         ++inserted;
         const auto sorted = std::ranges::is_sorted(packet.mCommands, {}, &protocol::CommandData::mName);
         std::println(
-            "[ProxyPass][Command] Registered proxy command '/{}' into AvailableCommands with flags={}, overloads={}, index={}, sorted={}",
+            "[ProxyPass][Command] Registered proxy command '/{}' into AvailableCommands with flags={}, overloads={}, "
+            "index={}, sorted={}",
             definition.name,
             definition.flags.raw(),
             packet.mCommands[index].mOverloads.size(),
@@ -155,7 +205,7 @@ bool CommandManager::handleRequest(ProxyBridge& bridge, const protocol::CommandR
     }
 
     const auto [overload, arguments] = parseOverload(*definition, packet.mCommand);
-    const auto* callback = findCallback(*definition, overload);
+    const auto*   callback           = findCallback(*definition, overload);
     CommandOutput output{packet.mOriginData};
     if (callback) {
         (*callback)(arguments, output);
@@ -189,8 +239,8 @@ void CommandManager::handlePlayerList(const protocol::PlayerListPacket& packet) 
         }
     } else {
         for (const auto& entry : packet.mPlayerEntryList) {
-            const auto key = std::pair{entry.mUUID.mMostSignificantBits, entry.mUUID.mLeastSignificantBits};
-            auto found = mPlayerNamesByUuid.find(key);
+            const auto key   = std::pair{entry.mUUID.mMostSignificantBits, entry.mUUID.mLeastSignificantBits};
+            auto       found = mPlayerNamesByUuid.find(key);
             if (found != mPlayerNamesByUuid.end()) {
                 mOnlinePlayers.erase(found->second);
                 mPlayerNamesByUuid.erase(found);
@@ -201,16 +251,7 @@ void CommandManager::handlePlayerList(const protocol::PlayerListPacket& packet) 
 }
 
 void CommandManager::addBuiltInTestCommands() {
-    auto addCommand = [this](CommandDefinition command) {
-        auto found = std::ranges::find_if(mCommands, [&command](const CommandDefinition& existing) {
-            return existing.name == command.name;
-        });
-        if (found != mCommands.end()) {
-            *found = std::move(command);
-            return;
-        }
-        mCommands.push_back(std::move(command));
-    };
+    auto addCommand = [this](CommandDefinition command) { registerCommand(std::move(command)); };
 
     addCommand({
         .name        = "proxytest",
@@ -252,24 +293,25 @@ void CommandManager::addBuiltInTestCommands() {
         .output      = "ProxyPass proxytarget executed.",
         .flags       = CommandFlag{CommandFlag::NotCheat},
         .overloads   = {{
-            .name       = "target_message",
-            .parameters = {
+            .name = "target_message",
+            .parameters =
                 {
-                    .name = "target",
-                    .type = "target",
+                    {
+                        .name = "target",
+                        .type = "target",
+                    },
+                    {
+                        .name     = "message",
+                        .type     = "message",
+                        .optional = true,
+                    },
                 },
-                {
-                    .name     = "message",
-                    .type     = "message",
-                    .optional = true,
-                },
-            },
         }},
         .callbacks   = {{
             .overload = "target_message",
             .callback = [](const CommandArguments& args, CommandOutput& output) {
-                const auto& target = args.at("target").get<CommandTarget>();
-                auto message = std::string{};
+                const auto& target  = args.at("target").get<CommandTarget>();
+                auto        message = std::string{};
                 if (auto found = args.find("message"); found != args.end()) {
                     message = found->second.get<std::string>();
                 }
@@ -325,49 +367,52 @@ void CommandManager::addBuiltInTestCommands() {
         .description = "ProxyPass test command with multiple overloads",
         .output      = "ProxyPass proxymulti executed.",
         .flags       = CommandFlag{CommandFlag::NotCheat},
-        .overloads   = {
-            {.name = "empty"},
+        .overloads =
             {
-                .name       = "count",
-                .parameters = {{
-                    .name = "count",
-                    .type = "int",
-                }},
-            },
-            {
-                .name       = "target_message",
-                .parameters = {
-                    {
-                        .name = "target",
-                        .type = "target",
-                    },
-                    {
-                        .name = "message",
-                        .type = "message",
-                    },
-                },
-            },
-        },
-        .callbacks   = {
-            {
+                                   {.name = "empty"},
+                                   {
+                    .name       = "count",
+                    .parameters = {{
+                        .name = "count",
+                        .type = "int",
+                    }},
+                }, {
+                    .name = "target_message",
+                    .parameters =
+                        {
+                            {
+                                .name = "target",
+                                .type = "target",
+                            },
+                            {
+                                .name = "message",
+                                .type = "message",
+                            },
+                        },
+                }, },
+        .callbacks = {
+                                   {
                 .overload = "empty",
-                .callback = [](const CommandArguments&, CommandOutput& output) {
-                    output.success("ProxyPass proxymulti empty overload.");
-                },
-            },
-            {
+                .callback = [](const CommandArguments&,
+                               CommandOutput& output) { output.success("ProxyPass proxymulti empty overload."); },
+            }, {
                 .overload = "count",
-                .callback = [](const CommandArguments& args, CommandOutput& output) {
-                    output.success("ProxyPass proxymulti count overload: " + std::to_string(args.at("count").get<std::int64_t>()));
-                },
-            },
-            {
+                .callback =
+                    [](const CommandArguments& args, CommandOutput& output) {
+                        output.success(
+                            "ProxyPass proxymulti count overload: "
+                            + std::to_string(args.at("count").get<std::int64_t>())
+                        );
+                    },
+            }, {
                 .overload = "target_message",
                 .callback = [](const CommandArguments& args, CommandOutput& output) {
-                    output.success("ProxyPass proxymulti target=" + args.at("target").get<CommandTarget>().value + " message=" + args.at("message").get<std::string>());
+                    output.success(
+                        "ProxyPass proxymulti target=" + args.at("target").get<CommandTarget>().value
+                        + " message=" + args.at("message").get<std::string>()
+                    );
                 },
-            },
-        },
+            }, },
     });
 
     addCommand({
@@ -416,18 +461,19 @@ void CommandManager::addBuiltInTestCommands() {
         .output      = "ProxyPass proxyparsestring executed.",
         .flags       = CommandFlag{CommandFlag::NotCheat},
         .overloads   = {{
-            .name       = "string_message",
-            .parameters = {
+            .name = "string_message",
+            .parameters =
                 {
-                    .name = "key",
-                    .type = "string",
+                    {
+                        .name = "key",
+                        .type = "string",
+                    },
+                    {
+                        .name     = "message",
+                        .type     = "message",
+                        .optional = true,
+                    },
                 },
-                {
-                    .name     = "message",
-                    .type     = "message",
-                    .optional = true,
-                },
-            },
         }},
         .callbacks   = {{
             .overload = "string_message",
@@ -446,36 +492,36 @@ void CommandManager::addBuiltInTestCommands() {
         .description = "ProxyPass parser test for overload priority",
         .output      = "ProxyPass proxyparseoverload executed.",
         .flags       = CommandFlag{CommandFlag::NotCheat},
-        .overloads   = {
+        .overloads =
             {
-                .name       = "int",
-                .parameters = {{
-                    .name = "value",
-                    .type = "int",
-                }},
-            },
-            {
-                .name       = "string",
-                .parameters = {{
-                    .name = "value",
-                    .type = "string",
-                }},
-            },
-        },
-        .callbacks   = {
-            {
+                                   {
+                    .name       = "int",
+                    .parameters = {{
+                        .name = "value",
+                        .type = "int",
+                    }},
+                },                                        {
+                    .name       = "string",
+                    .parameters = {{
+                        .name = "value",
+                        .type = "string",
+                    }},
+                }, },
+        .callbacks = {
+                                   {
                 .overload = "int",
-                .callback = [](const CommandArguments& args, CommandOutput& output) {
-                    output.success("proxyparseoverload int=" + std::to_string(args.at("value").get<std::int64_t>()));
-                },
-            },
-            {
+                .callback =
+                    [](const CommandArguments& args, CommandOutput& output) {
+                        output.success(
+                            "proxyparseoverload int=" + std::to_string(args.at("value").get<std::int64_t>())
+                        );
+                    },
+            },                    {
                 .overload = "string",
                 .callback = [](const CommandArguments& args, CommandOutput& output) {
                     output.success("proxyparseoverload string=" + args.at("value").get<std::string>());
                 },
-            },
-        },
+            }, },
     });
 
     addCommand({
@@ -483,37 +529,35 @@ void CommandManager::addBuiltInTestCommands() {
         .description = "ProxyPass parser test for soft enum priority and string fallback",
         .output      = "ProxyPass proxyparsesoft executed.",
         .flags       = CommandFlag{CommandFlag::NotCheat},
-        .overloads   = {
+        .overloads =
             {
-                .name       = "soft_enum",
-                .parameters = {{
-                    .name       = "value",
-                    .type       = "soft_enum",
-                    .enumValues = {"status", "reload", "dump"},
-                }},
-            },
-            {
-                .name       = "string",
-                .parameters = {{
-                    .name = "value",
-                    .type = "string",
-                }},
-            },
-        },
-        .callbacks   = {
-            {
+                                   {
+                    .name       = "soft_enum",
+                    .parameters = {{
+                        .name       = "value",
+                        .type       = "soft_enum",
+                        .enumValues = {"status", "reload", "dump"},
+                    }},
+                },                                        {
+                    .name       = "string",
+                    .parameters = {{
+                        .name = "value",
+                        .type = "string",
+                    }},
+                }, },
+        .callbacks = {
+                                   {
                 .overload = "soft_enum",
-                .callback = [](const CommandArguments& args, CommandOutput& output) {
-                    output.success("proxyparsesoft soft_enum=" + args.at("value").get<std::string>());
-                },
-            },
-            {
+                .callback =
+                    [](const CommandArguments& args, CommandOutput& output) {
+                        output.success("proxyparsesoft soft_enum=" + args.at("value").get<std::string>());
+                    },
+            },                    {
                 .overload = "string",
                 .callback = [](const CommandArguments& args, CommandOutput& output) {
                     output.success("proxyparsesoft string=" + args.at("value").get<std::string>());
                 },
-            },
-        },
+            }, },
     });
 
     addCommand({
@@ -562,7 +606,7 @@ void CommandManager::addBuiltInTestCommands() {
 
 const CommandManager::CommandDefinition* CommandManager::findCommand(std::string_view command) const {
     const auto normalized = normalizeCommand(command);
-    auto found = std::ranges::find_if(mCommands, [&normalized](const CommandDefinition& definition) {
+    auto       found      = std::ranges::find_if(mCommands, [&normalized](const CommandDefinition& definition) {
         return definition.name == normalized;
     });
     if (found == mCommands.end()) {
@@ -571,10 +615,8 @@ const CommandManager::CommandDefinition* CommandManager::findCommand(std::string
     return &*found;
 }
 
-std::pair<const CommandManager::OverloadDefinition*, CommandManager::CommandArguments> CommandManager::parseOverload(
-    const CommandDefinition& command,
-    std::string_view commandLine
-) const {
+std::pair<const CommandManager::OverloadDefinition*, CommandManager::CommandArguments>
+CommandManager::parseOverload(const CommandDefinition& command, std::string_view commandLine) const {
     for (const auto& overload : command.overloads) {
         if (!overloadHasSoftEnum(overload)) {
             continue;
@@ -602,12 +644,10 @@ std::pair<const CommandManager::OverloadDefinition*, CommandManager::CommandArgu
     return {nullptr, {}};
 }
 
-const CommandManager::CommandCallback* CommandManager::findCallback(
-    const CommandDefinition& command,
-    const OverloadDefinition* overload
-) const {
+const CommandManager::CommandCallback*
+CommandManager::findCallback(const CommandDefinition& command, const OverloadDefinition* overload) const {
     const auto overloadName = overload ? std::string_view{overload->name} : std::string_view{};
-    auto found = std::ranges::find_if(command.callbacks, [overloadName](const CallbackDefinition& callback) {
+    auto       found = std::ranges::find_if(command.callbacks, [overloadName](const CallbackDefinition& callback) {
         return callback.overload == overloadName;
     });
     if (found == command.callbacks.end()) {
@@ -618,8 +658,8 @@ const CommandManager::CommandCallback* CommandManager::findCallback(
 
 protocol::CommandOverloadData CommandManager::makeOverload(
     protocol::AvailableCommandsPacket& packet,
-    const CommandDefinition& command,
-    const OverloadDefinition& overload
+    const CommandDefinition&           command,
+    const OverloadDefinition&          overload
 ) {
     protocol::CommandOverloadData result{};
     result.mIsChaining = overload.chaining;
@@ -630,17 +670,18 @@ protocol::CommandOverloadData CommandManager::makeOverload(
 }
 
 std::optional<CommandManager::CommandArguments> CommandManager::parseArguments(
-    std::string_view commandLine,
+    std::string_view          commandLine,
     const OverloadDefinition& overload,
-    SoftEnumMatch softEnumMatch
+    SoftEnumMatch             softEnumMatch
 ) const {
     if (commandLine.starts_with('/')) {
         commandLine.remove_prefix(1U);
     }
 
     const auto firstSpace = commandLine.find(' ');
-    const auto argsLine = firstSpace == std::string_view::npos ? std::string_view{} : commandLine.substr(firstSpace + 1U);
-    const auto tokens   = tokenize(argsLine);
+    const auto argsLine =
+        firstSpace == std::string_view::npos ? std::string_view{} : commandLine.substr(firstSpace + 1U);
+    const auto tokens = tokenize(argsLine);
 
     CommandArguments result{};
     std::size_t      tokenIndex{};
@@ -653,7 +694,7 @@ std::optional<CommandManager::CommandArguments> CommandManager::parseArguments(
                 }
                 return std::nullopt;
             }
-            const auto messageStart = tokens[tokenIndex].begin;
+            const auto      messageStart = tokens[tokenIndex].begin;
             CommandArgument argument{};
             argument.type  = parameter.type;
             argument.raw   = std::string{argsLine.substr(messageStart)};
@@ -689,7 +730,8 @@ std::optional<CommandManager::CommandArguments> CommandManager::parseArguments(
                 return std::nullopt;
             }
 
-            auto joined = tokens[tokenIndex].raw + ' ' + tokens[tokenIndex + 1U].raw + ' ' + tokens[tokenIndex + 2U].raw;
+            auto joined =
+                tokens[tokenIndex].raw + ' ' + tokens[tokenIndex + 1U].raw + ' ' + tokens[tokenIndex + 2U].raw;
             argument = parseArgument(parameter, joined, false, softEnumMatch);
             if (!argument) {
                 if (parameter.optional) {
@@ -732,9 +774,9 @@ std::optional<CommandManager::CommandArguments> CommandManager::parseArguments(
 
 std::optional<CommandManager::CommandArgument> CommandManager::parseArgument(
     const ParameterDefinition& parameter,
-    std::string_view raw,
-    bool quoted,
-    SoftEnumMatch softEnumMatch
+    std::string_view           raw,
+    bool                       quoted,
+    SoftEnumMatch              softEnumMatch
 ) const {
     CommandArgument argument{};
     argument.type = parameter.type;
@@ -746,9 +788,9 @@ std::optional<CommandManager::CommandArgument> CommandManager::parseArgument(
 
     if (parameter.type == "int") {
         std::int64_t value{};
-        const auto* first = raw.data();
-        const auto* last  = raw.data() + raw.size();
-        const auto parsed = std::from_chars(first, last, value);
+        const auto*  first  = raw.data();
+        const auto*  last   = raw.data() + raw.size();
+        const auto   parsed = std::from_chars(first, last, value);
         if (parsed.ec != std::errc{} || parsed.ptr != last) {
             return std::nullopt;
         }
@@ -757,10 +799,10 @@ std::optional<CommandManager::CommandArgument> CommandManager::parseArgument(
     }
 
     if (parameter.type == "float" || parameter.type == "value") {
-        double value{};
-        const auto* first = raw.data();
-        const auto* last  = raw.data() + raw.size();
-        const auto parsed = std::from_chars(first, last, value);
+        double      value{};
+        const auto* first  = raw.data();
+        const auto* last   = raw.data() + raw.size();
+        const auto  parsed = std::from_chars(first, last, value);
         if (parsed.ec != std::errc{} || parsed.ptr != last) {
             return std::nullopt;
         }
@@ -823,10 +865,10 @@ std::optional<CommandManager::CommandPosition> CommandManager::parsePosition(std
             return std::string{original};
         }
 
-        double parsed{};
-        const auto* first = value.data();
-        const auto* last  = value.data() + value.size();
-        const auto result = std::from_chars(first, last, parsed);
+        double      parsed{};
+        const auto* first  = value.data();
+        const auto* last   = value.data() + value.size();
+        const auto  result = std::from_chars(first, last, parsed);
         if (result.ec != std::errc{} || result.ptr != last) {
             return std::nullopt;
         }
@@ -872,11 +914,7 @@ std::optional<CommandManager::CommandPosition> CommandManager::parsePosition(std
         if (!x || !y || !z) {
             return std::nullopt;
         }
-        return CommandPosition{
-            std::move(*x),
-            std::move(*y),
-            std::move(*z)
-        };
+        return CommandPosition{std::move(*x), std::move(*y), std::move(*z)};
     };
 
     if (auto position = parseCompact('~')) {
@@ -899,8 +937,8 @@ bool CommandManager::overloadHasSoftEnum(const OverloadDefinition& overload) {
 
 protocol::CommandParameterData CommandManager::makeParameter(
     protocol::AvailableCommandsPacket& packet,
-    const CommandDefinition& command,
-    const ParameterDefinition& parameter
+    const CommandDefinition&           command,
+    const ParameterDefinition&         parameter
 ) {
     protocol::CommandParameterData result{};
     result.mName        = parameter.name;
@@ -912,8 +950,8 @@ protocol::CommandParameterData CommandManager::makeParameter(
 
 std::uint32_t CommandManager::parseSymbolFor(
     protocol::AvailableCommandsPacket& packet,
-    const CommandDefinition& command,
-    const ParameterDefinition& parameter
+    const CommandDefinition&           command,
+    const ParameterDefinition&         parameter
 ) {
     if (parameter.parseSymbol != 0U) {
         return parameter.parseSymbol;
@@ -929,20 +967,20 @@ std::uint32_t CommandManager::parseSymbolFor(
 
 std::uint32_t CommandManager::enumParseSymbol(
     protocol::AvailableCommandsPacket& packet,
-    std::string enumName,
-    const std::vector<std::string>& values
+    std::string                        enumName,
+    const std::vector<std::string>&    values
 ) {
     return addEnum(packet, std::move(enumName), values);
 }
 
 std::uint32_t CommandManager::addEnum(
     protocol::AvailableCommandsPacket& packet,
-    std::string enumName,
-    const std::vector<std::string>& values
+    std::string                        enumName,
+    const std::vector<std::string>&    values
 ) {
     constexpr std::uint32_t EnumSymbolFlag = 0x300000U;
 
-    auto enumData = protocol::CommandEnumData{};
+    auto enumData  = protocol::CommandEnumData{};
     enumData.mName = std::move(enumName);
     for (const auto& value : values) {
         auto found = std::ranges::find(packet.mEnumValues, value);
@@ -951,7 +989,9 @@ std::uint32_t CommandManager::addEnum(
             enumData.mValues.push_back(static_cast<std::uint32_t>(packet.mEnumValues.size() - 1U));
             continue;
         }
-        enumData.mValues.push_back(static_cast<std::uint32_t>(std::ranges::distance(packet.mEnumValues.begin(), found)));
+        enumData.mValues.push_back(
+            static_cast<std::uint32_t>(std::ranges::distance(packet.mEnumValues.begin(), found))
+        );
     }
 
     packet.mEnumData.push_back(std::move(enumData));
@@ -960,8 +1000,8 @@ std::uint32_t CommandManager::addEnum(
 
 std::uint32_t CommandManager::addSoftEnum(
     protocol::AvailableCommandsPacket& packet,
-    std::string enumName,
-    const std::vector<std::string>& values
+    std::string                        enumName,
+    const std::vector<std::string>&    values
 ) {
     constexpr std::uint32_t SoftEnumSymbolFlag = 0x4000000U;
 
@@ -969,8 +1009,7 @@ std::uint32_t CommandManager::addSoftEnum(
         return softEnum.mName == enumName;
     });
     if (found != packet.mSoftEnums.end()) {
-        return SoftEnumSymbolFlag |
-            static_cast<std::uint32_t>(std::ranges::distance(packet.mSoftEnums.begin(), found));
+        return SoftEnumSymbolFlag | static_cast<std::uint32_t>(std::ranges::distance(packet.mSoftEnums.begin(), found));
     }
 
     protocol::CommandSoftEnumData softEnum{};
@@ -1033,7 +1072,7 @@ std::vector<CommandManager::Token> CommandManager::tokenize(std::string_view com
             break;
         }
 
-        const auto begin = offset;
+        const auto  begin = offset;
         std::string raw{};
         if (commandLine[offset] == '"') {
             ++offset;

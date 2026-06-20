@@ -71,6 +71,7 @@ struct CommandFlag {
 };
 
 class CommandManager {
+public:
     struct CommandTarget {
         std::string value{};
     };
@@ -108,22 +109,22 @@ class CommandManager {
         using iterator       = Map::iterator;
         using const_iterator = Map::const_iterator;
 
-        [[nodiscard]] bool empty() const noexcept;
+        [[nodiscard]] bool        empty() const noexcept;
         [[nodiscard]] std::size_t size() const noexcept;
 
-        [[nodiscard]] iterator begin() noexcept;
-        [[nodiscard]] iterator end() noexcept;
+        [[nodiscard]] iterator       begin() noexcept;
+        [[nodiscard]] iterator       end() noexcept;
         [[nodiscard]] const_iterator begin() const noexcept;
         [[nodiscard]] const_iterator end() const noexcept;
 
-        [[nodiscard]] iterator find(std::string_view key);
-        [[nodiscard]] const_iterator find(std::string_view key) const;
-        [[nodiscard]] bool contains(std::string_view key) const;
-        [[nodiscard]] CommandArgument& at(std::string_view key);
+        [[nodiscard]] iterator               find(std::string_view key);
+        [[nodiscard]] const_iterator         find(std::string_view key) const;
+        [[nodiscard]] bool                   contains(std::string_view key) const;
+        [[nodiscard]] CommandArgument&       at(std::string_view key);
         [[nodiscard]] const CommandArgument& at(std::string_view key) const;
 
         CommandArgument& operator[](std::string key);
-        void insert_or_assign(std::string key, CommandArgument argument);
+        void             insert_or_assign(std::string key, CommandArgument argument);
     };
 
     class CommandOutput {
@@ -161,14 +162,15 @@ class CommandManager {
     };
 
     struct CommandDefinition {
-        std::string name{};
-        std::string description{};
-        std::string output{};
-        CommandFlag flags{};
+        std::string                     name{};
+        std::string                     description{};
+        std::string                     output{};
+        CommandFlag                     flags{};
         std::vector<OverloadDefinition> overloads{};
         std::vector<CallbackDefinition> callbacks{};
     };
 
+private:
     enum class SoftEnumMatch {
         Strict,
         Loose,
@@ -182,8 +184,8 @@ class CommandManager {
         bool        valid{true};
     };
 
-    std::vector<CommandDefinition> mCommands{};
-    std::set<std::string, std::less<>> mOnlinePlayers{};
+    std::vector<CommandDefinition>                                 mCommands{};
+    std::set<std::string, std::less<>>                             mOnlinePlayers{};
     std::map<std::pair<std::uint64_t, std::uint64_t>, std::string> mPlayerNamesByUuid{};
 
 public:
@@ -191,69 +193,62 @@ public:
 
     bool initialize();
 
+    void registerCommand(CommandDefinition command);
+    void registerOverload(std::string_view commandName, OverloadDefinition overload, CommandCallback callback = {});
+
     [[nodiscard]] std::pair<std::size_t, std::size_t> injectCommands(protocol::AvailableCommandsPacket& packet) const;
     [[nodiscard]] bool handleRequest(ProxyBridge& bridge, const protocol::CommandRequestPacket& packet) const;
-    void handlePlayerList(const protocol::PlayerListPacket& packet);
+    void               handlePlayerList(const protocol::PlayerListPacket& packet);
 
 private:
     void addBuiltInTestCommands();
 
     [[nodiscard]] const CommandDefinition* findCommand(std::string_view command) const;
-    [[nodiscard]] std::pair<const OverloadDefinition*, CommandArguments> parseOverload(
-        const CommandDefinition& command,
-        std::string_view commandLine
-    ) const;
-    [[nodiscard]] const CommandCallback* findCallback(
-        const CommandDefinition& command,
-        const OverloadDefinition* overload
-    ) const;
+    [[nodiscard]] std::pair<const OverloadDefinition*, CommandArguments>
+    parseOverload(const CommandDefinition& command, std::string_view commandLine) const;
+    [[nodiscard]] const CommandCallback*
+    findCallback(const CommandDefinition& command, const OverloadDefinition* overload) const;
     [[nodiscard]] static protocol::CommandOverloadData makeOverload(
         protocol::AvailableCommandsPacket& packet,
-        const CommandDefinition& command,
-        const OverloadDefinition& overload
+        const CommandDefinition&           command,
+        const OverloadDefinition&          overload
     );
-    [[nodiscard]] std::optional<CommandArguments> parseArguments(
-        std::string_view commandLine,
-        const OverloadDefinition& overload,
-        SoftEnumMatch softEnumMatch
-    ) const;
+    [[nodiscard]] std::optional<CommandArguments>
+    parseArguments(std::string_view commandLine, const OverloadDefinition& overload, SoftEnumMatch softEnumMatch) const;
     [[nodiscard]] std::optional<CommandArgument> parseArgument(
         const ParameterDefinition& parameter,
-        std::string_view raw,
-        bool quoted,
-        SoftEnumMatch softEnumMatch
+        std::string_view           raw,
+        bool                       quoted,
+        SoftEnumMatch              softEnumMatch
     ) const;
     [[nodiscard]] static std::optional<CommandPosition> parsePosition(std::string_view raw);
-    [[nodiscard]] static bool overloadHasSoftEnum(const OverloadDefinition& overload);
-    [[nodiscard]] bool isKnownPlayer(std::string_view name) const;
-    [[nodiscard]] static std::vector<Token> tokenize(std::string_view commandLine);
+    [[nodiscard]] static bool                           overloadHasSoftEnum(const OverloadDefinition& overload);
+    [[nodiscard]] bool                                  isKnownPlayer(std::string_view name) const;
+    [[nodiscard]] static std::vector<Token>             tokenize(std::string_view commandLine);
     [[nodiscard]] static protocol::CommandParameterData makeParameter(
         protocol::AvailableCommandsPacket& packet,
-        const CommandDefinition& command,
-        const ParameterDefinition& parameter
+        const CommandDefinition&           command,
+        const ParameterDefinition&         parameter
     );
     [[nodiscard]] static std::uint32_t parseSymbolFor(
         protocol::AvailableCommandsPacket& packet,
-        const CommandDefinition& command,
-        const ParameterDefinition& parameter
+        const CommandDefinition&           command,
+        const ParameterDefinition&         parameter
     );
     [[nodiscard]] static std::uint32_t enumParseSymbol(
         protocol::AvailableCommandsPacket& packet,
-        std::string enumName,
-        const std::vector<std::string>& values
+        std::string                        enumName,
+        const std::vector<std::string>&    values
     );
-    [[nodiscard]] static std::uint32_t addEnum(
-        protocol::AvailableCommandsPacket& packet,
-        std::string enumName,
-        const std::vector<std::string>& values
-    );
+    [[nodiscard]] static std::uint32_t
+    addEnum(protocol::AvailableCommandsPacket& packet, std::string enumName, const std::vector<std::string>& values);
     [[nodiscard]] static std::uint32_t addSoftEnum(
         protocol::AvailableCommandsPacket& packet,
-        std::string enumName,
-        const std::vector<std::string>& values
+        std::string                        enumName,
+        const std::vector<std::string>&    values
     );
     [[nodiscard]] static std::uint32_t builtinParseSymbol(std::string_view type);
-    [[nodiscard]] static std::string normalizeCommand(std::string_view command);
+    [[nodiscard]] static std::string   normalizeCommand(std::string_view command);
 };
 
 } // namespace sculk

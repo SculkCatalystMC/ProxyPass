@@ -26,6 +26,7 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
 
 include(FetchContent)
+find_package(OpenSSL REQUIRED)
 set(PROTOCOL_ENABLE_FORMATTING ON CACHE BOOL "Enable formatting support in Protocol")
 FetchContent_Declare(
 	Protocol
