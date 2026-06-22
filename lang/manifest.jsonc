@@ -1,0 +1,8 @@
+{
+  "catalog_version": 1,
+  "base_locale": "en-US",
+  "supported_locales": [
+    "en-US",
+    "zh-CN"
+  ]
+}

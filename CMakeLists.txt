@@ -80,6 +80,12 @@ target_include_directories(${PROJECT_NAME}
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_23)
 
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy_directory
+		"${CMAKE_CURRENT_SOURCE_DIR}/lang"
+		"$<TARGET_FILE_DIR:${PROJECT_NAME}>/lang"
+)
+
 if(MSVC)
 	target_sources(${PROJECT_NAME} PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/src/Version.rc"
@@ -92,6 +98,7 @@ if(MSVC)
 		/W4
 		/utf-8
 		/GR-
+		/EHsc
 		/Zc:preprocessor
 		/permissive-
 		$<$<CONFIG:Release>:/O2>

@@ -1,0 +1,53 @@
+{
+  "locale": "zh-CN",
+  "fallback": "en-US",
+  "messages": {
+    "proxy.starting": "正在启动代理服务器...",
+    "proxy.version": "版本：{0}（协议版本 {1}）",
+    "proxy.started": "代理服务器已启动，用时 {0:.2f} 秒。",
+    "proxy.stopped": "代理服务器已停止。",
+    "proxy.shutdown": "正在关闭代理服务器...",
+    "proxy.exiting_with_code": "程序正在以错误代码 {0} 退出。",
+
+    "network.ipv4_supported": "IPv4 已启用，端口：{0}",
+    "network.ipv6_supported": "IPv6 已启用，端口：{0}",
+    "network.start_failed": "代理服务器启动失败。",
+    "network.port_in_use": "端口 [{0}] 可能已被其他进程占用。请释放端口后重新运行，或修改 proxy_settings.jsonc 为代理服务器使用其他端口。",
+
+    "auth.waiting_services": "正在等待 Minecraft 服务...",
+    "auth.services_failed": "连接 Minecraft 服务失败：{0}",
+
+    "command.unknown": "未知命令：{0}。请确认该命令存在，并且你拥有使用权限。",
+
+    "client.invalid_connection_request": "无效的连接请求",
+    "client.connection_verification_failed": "连接请求验证失败",
+    "client.failed_generate_handshake_token": "无法生成握手令牌",
+    "client.failed_compute_session_token": "无法计算客户端会话令牌",
+    "client.failed_upstream_connect": "无法连接到上游服务器",
+    "client.failed_bridge_init": "代理桥初始化失败",
+    "client.invalid_handshake_token": "无效的握手令牌",
+    "client.failed_server_session_key": "无法计算服务器会话密钥",
+    "client.proxy_shutdown": "代理服务器正在关闭",
+
+    "crypto.server_key_pair_failed": "生成服务器密钥对失败：{0}",
+    "proxy.callback_disconnect_failed": "设置代理服务器断开连接回调失败。",
+    "proxy.callback_packet_receive_failed": "设置代理服务器数据包接收回调失败。",
+    "proxy.callback_packet_parse_failed": "设置代理服务器数据包解析失败回调失败。",
+    "proxy.packet_parse_failed": "解析数据包失败：{0}",
+    "upstream.callback_packet_receive_failed": "设置上游数据包接收回调失败。",
+    "upstream.callback_packet_parse_failed": "设置上游数据包解析失败回调失败。",
+    "upstream.callback_connected_failed": "设置上游连接成功回调失败。",
+    "upstream.callback_connection_failure_failed": "设置上游连接失败回调失败。",
+    "upstream.connect_player_failed": "玩家 {0} 连接上游服务器失败。",
+    "upstream.bridge_player_init_failed": "玩家 {0} 的代理桥初始化失败。",
+    "upstream.sign_login_token_failed": "签名上游登录令牌失败：{0}",
+    "upstream.sign_login_token_disconnect": "签名上游登录令牌失败",
+
+    "i18n.created_lang_dir": "已创建语言目录：{0}",
+    "i18n.installed_builtin_catalog": "已安装内置语言文件：{0}",
+    "i18n.catalog_parse_failed": "语言文件解析失败：{0}",
+    "i18n.catalog_incomplete": "语言文件 {0} 不完整：缺少 {1} 个 key。",
+    "i18n.missing_report_written": "已写出缺失翻译报告：{0}",
+    "i18n.placeholder_mismatch": "语言 {0} 的 key {1} 占位符不匹配。期望 {2}，实际 {3}。"
+  }
+}

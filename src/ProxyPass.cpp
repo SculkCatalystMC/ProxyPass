@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #include "ProxyPass.hpp"
+#include "I18n.hpp"
 #include "Logger.hpp"
 #include <iostream>
 #include <print>
@@ -64,17 +65,34 @@ ProxyPass::~ProxyPass() { mSettings.save(); }
 Logger& ProxyPass::getLogger() { return mLogger; }
 
 bool ProxyPass::start() {
-    getLogger().info("Starting proxy server...");
     std::chrono::high_resolution_clock::time_point startTime = std::chrono::high_resolution_clock::now();
-
-    getLogger()
-        .info("Version: {}(ProtocolVersion {})", protocol::getMinecraftVersion(), protocol::getProtocolVersion());
 
     mSettings.load();
 
+    i18n::init({
+        .langDir                 = "./lang",
+        .userLangDir             = "./lang/user",
+        .locale                  = mSettings.language,
+        .autoInstallMissingFiles = mSettings.i18n_auto_install,
+        .checkCompleteness       = mSettings.i18n_check_completeness,
+        .writeMissingReport      = mSettings.i18n_write_missing_report,
+    });
+
+    getLogger().info(i18n::tr("proxy.starting", "Starting proxy server..."));
+    getLogger().info(i18n::tr(
+        "proxy.version",
+        "Version: {0}(ProtocolVersion {1})",
+        protocol::getMinecraftVersion(),
+        protocol::getProtocolVersion()
+    ));
+
     auto serverKeyPair = protocol::ssl::randomES384KeyPair();
     if (!serverKeyPair) {
-        getLogger().fatal("Failed to generate server key pair: {}", serverKeyPair.error().message());
+        getLogger().fatal(i18n::tr(
+            "crypto.server_key_pair_failed",
+            "Failed to generate server key pair: {0}",
+            serverKeyPair.error().message()
+        ));
         return false;
     }
     mProxyServerKeyPair = *serverKeyPair;
@@ -82,7 +100,9 @@ bool ProxyPass::start() {
     if (!mProxyServer.setOnDisconnected([this](const RakNet::RakNetGUID& guid, const RakNet::SystemAddress&) noexcept {
             onClientDisconnected(guid);
         })) [[unlikely]] {
-        getLogger().fatal("Failed to set proxy server disconnect callback.");
+        getLogger().fatal(
+            i18n::tr("proxy.callback_disconnect_failed", "Failed to set proxy server disconnect callback.")
+        );
         return false;
     }
 
@@ -91,7 +111,9 @@ bool ProxyPass::start() {
                                              const RakNet::SystemAddress&         address,
                                              std::unique_ptr<protocol::IPacket>&& packet
                                          ) noexcept { onRealClientPacket(guid, address, *packet); })) [[unlikely]] {
-        getLogger().fatal("Failed to set proxy server packet receive callback.");
+        getLogger().fatal(
+            i18n::tr("proxy.callback_packet_receive_failed", "Failed to set proxy server packet receive callback.")
+        );
         return false;
     }
 
@@ -102,9 +124,12 @@ bool ProxyPass::start() {
                                                      protocol::Session::Buffer&&,
                                                      std::string message
                                                  ) noexcept {
-                getLogger().error("Failed to parse packet: {}", message);
+                getLogger().error(i18n::tr("proxy.packet_parse_failed", "Failed to parse packet: {0}", message));
             })) [[unlikely]] {
-            getLogger().fatal("Failed to set proxy server packet parse failure callback.");
+            getLogger().fatal(i18n::tr(
+                "proxy.callback_packet_parse_failed",
+                "Failed to set proxy server packet parse failure callback."
+            ));
             return false;
         }
     }
@@ -112,33 +137,40 @@ bool ProxyPass::start() {
     mProxyServer.setMotd(mSettings.motd);
     auto startResult = mProxyServer.start(mSettings.proxy_port, mSettings.proxy_port_v6, mSettings.max_players);
     if (startResult != protocol::NetworkStartResult::Success) [[unlikely]] {
-        getLogger().fatal("Failed to start proxy server.");
+        getLogger().fatal(i18n::tr("network.start_failed", "Failed to start proxy server."));
         if (startResult == protocol::NetworkStartResult::SocketPortAlreadyInUse) {
-            getLogger().fatal(
-                "Port [{}] may be in use by another process. Free up port and re-run program or adjust "
+            getLogger().fatal(i18n::tr(
+                "network.port_in_use",
+                "Port [{0}] may be in use by another process. Free up port and re-run program or adjust "
                 "proxy_settings.jsonc file to use alternate ports for proxy server",
                 mSettings.proxy_port
-            );
-            getLogger().fatal(
-                "Port [{}] may be in use by another process. Free up port and re-run program or adjust "
+            ));
+            getLogger().fatal(i18n::tr(
+                "network.port_in_use",
+                "Port [{0}] may be in use by another process. Free up port and re-run program or adjust "
                 "proxy_settings.jsonc file to use alternate ports for proxy server",
                 mSettings.proxy_port_v6
-            );
+            ));
         }
-        getLogger().fatal(
-            "Exiting program with error code {}.",
+        getLogger().fatal(i18n::tr(
+            "proxy.exiting_with_code",
+            "Exiting program with error code {0}.",
             static_cast<std::underlying_type_t<protocol::NetworkStartResult>>(startResult)
-        );
+        ));
         return false;
     }
 
-    getLogger().info("IPv4 supported, port: {}", mSettings.proxy_port);
-    getLogger().info("IPv6 supported, port: {}", mSettings.proxy_port_v6);
+    getLogger().info(i18n::tr("network.ipv4_supported", "IPv4 supported, port: {0}", mSettings.proxy_port));
+    getLogger().info(i18n::tr("network.ipv6_supported", "IPv6 supported, port: {0}", mSettings.proxy_port_v6));
 
     if (mSettings.online_mode) {
-        getLogger().info("Waiting for Minecraft services...");
+        getLogger().info(i18n::tr("auth.waiting_services", "Waiting for Minecraft services..."));
         if (auto status = mAuthManager.initMojangPublicKeyFromNetwork(); !status) {
-            getLogger().fatal("Failed to connect to Minecraft services: {}", status.error().message());
+            getLogger().fatal(i18n::tr(
+                "auth.services_failed",
+                "Failed to connect to Minecraft services: {0}",
+                status.error().message()
+            ));
             return false;
         }
     } else {
@@ -147,10 +179,11 @@ bool ProxyPass::start() {
 
     std::chrono::high_resolution_clock::time_point endTime = std::chrono::high_resolution_clock::now();
 
-    getLogger().info(
-        "Proxy server started in {:.2f} seconds.",
+    getLogger().info(i18n::tr(
+        "proxy.started",
+        "Proxy server started in {0:.2f} seconds.",
         std::chrono::duration<double>(endTime - startTime).count()
-    );
+    ));
     return true;
 }
 
@@ -289,7 +322,7 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::LoginPacket& p
     if (!request) {
         return disconnectClient(
             bridge.mRealGuid,
-            "Invalid connection request",
+            i18n::tr("client.invalid_connection_request", "Invalid connection request"),
             protocol::DisconnectFailReason::BadPacket
         );
     }
@@ -301,7 +334,7 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::LoginPacket& p
     if (!bridge.mConnectionRequest.verify(mAuthManager, mSettings.online_mode)) {
         return disconnectClient(
             bridge.mRealGuid,
-            "Connection request verification failed",
+            i18n::tr("client.connection_verification_failed", "Connection request verification failed"),
             protocol::DisconnectFailReason::NotAuthenticated
         );
     }
@@ -310,7 +343,7 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::LoginPacket& p
     if (!token) {
         return disconnectClient(
             bridge.mRealGuid,
-            "Failed to generate handshake token",
+            i18n::tr("client.failed_generate_handshake_token", "Failed to generate handshake token"),
             protocol::DisconnectFailReason::BadPacket
         );
     }
@@ -330,7 +363,7 @@ void ProxyPass::handleClient(ProxyBridge& bridge, const protocol::LoginPacket& p
     if (!sessionToken) {
         return disconnectClient(
             bridge.mRealGuid,
-            "Failed to compute client session token",
+            i18n::tr("client.failed_compute_session_token", "Failed to compute client session token"),
             protocol::DisconnectFailReason::BadPacket
         );
     }
@@ -368,17 +401,22 @@ void ProxyPass::handleFirstClientPacket(
             }
             processServerPacket(*currentBridge, *packet);
         })) [[unlikely]] {
-        getLogger().error("Failed to set upstream packet receive callback.");
+        getLogger().error(
+            i18n::tr("upstream.callback_packet_receive_failed", "Failed to set upstream packet receive callback.")
+        );
         return;
     }
 
     if (mSettings.packets_logger->log_parse_error) {
         if (!bridge->mProxyClient.setOnPacketParseFailed(
                 [this](protocol::Session::Buffer&&, std::string message) noexcept {
-                    getLogger().error("Failed to parse packet: {}", message);
+                    getLogger().error(i18n::tr("proxy.packet_parse_failed", "Failed to parse packet: {0}", message));
                 }
             )) [[unlikely]] {
-            getLogger().error("Failed to set upstream packet parse failure callback.");
+            getLogger().error(i18n::tr(
+                "upstream.callback_packet_parse_failed",
+                "Failed to set upstream packet parse failure callback."
+            ));
             return;
         }
     }
@@ -401,7 +439,7 @@ void ProxyPass::handleFirstClientPacket(
 
             currentBridge->mClientReady.store(true, std::memory_order_release);
         })) [[unlikely]] {
-        getLogger().error("Failed to set upstream connected callback.");
+        getLogger().error(i18n::tr("upstream.callback_connected_failed", "Failed to set upstream connected callback."));
         return;
     }
 
@@ -411,10 +449,11 @@ void ProxyPass::handleFirstClientPacket(
                 return;
             }
 
-            getLogger().info(
-                "Failed to connect to upstream server for player: {}.",
+            getLogger().info(i18n::tr(
+                "upstream.connect_player_failed",
+                "Failed to connect to upstream server for player: {0}.",
                 currentBridge->mConnectionRequest.getXboxLiveName()
-            );
+            ));
             getLogger().info(
                 "[{}] Player disconnected: {}, xuid: {}, pfid: {}",
                 currentBridge->mRealAddress.ToString(),
@@ -424,28 +463,37 @@ void ProxyPass::handleFirstClientPacket(
             );
             disconnectClient(
                 currentBridge->mRealGuid,
-                "Failed to connect to upstream server",
+                i18n::tr("client.failed_upstream_connect", "Failed to connect to upstream server"),
                 protocol::DisconnectFailReason::CantConnect
             );
         })) [[unlikely]] {
-        getLogger().error("Failed to set upstream connection failure callback.");
+        getLogger().error(i18n::tr(
+            "upstream.callback_connection_failure_failed",
+            "Failed to set upstream connection failure callback."
+        ));
         return;
     }
 
     if (!bridge->init()) {
-        getLogger().error(
-            "Failed to initialize proxy bridge for player: {}.",
+        getLogger().error(i18n::tr(
+            "upstream.bridge_player_init_failed",
+            "Failed to initialize proxy bridge for player: {0}.",
             bridge->mConnectionRequest.getXboxLiveName()
+        ));
+        return disconnectClient(
+            guid,
+            i18n::tr("client.failed_bridge_init", "Failed to initialize proxy bridge"),
+            protocol::DisconnectFailReason::Unknown
         );
-        return disconnectClient(guid, "Failed to initialize proxy bridge", protocol::DisconnectFailReason::Unknown);
     }
 
     if (bridge->mProxyClient.connect(mSettings.upstream_host, mSettings.upstream_port)
         != protocol::ClientNetworkSystem::ConnectionResult::ConnectionAttemptStarted) [[unlikely]] {
-        getLogger().info(
-            "Failed to connect to upstream server for player: {}.",
+        getLogger().info(i18n::tr(
+            "upstream.connect_player_failed",
+            "Failed to connect to upstream server for player: {0}.",
             bridge->mConnectionRequest.getXboxLiveName()
-        );
+        ));
         getLogger().info(
             "[{}] Player disconnected: {}, xuid: {}, pfid: {}",
             bridge->mRealAddress.ToString(),
@@ -453,7 +501,11 @@ void ProxyPass::handleFirstClientPacket(
             bridge->mClientInfo.xuid.empty() ? "N/A" : bridge->mClientInfo.xuid,
             bridge->mClientInfo.pfid.empty() ? "N/A" : bridge->mClientInfo.pfid
         );
-        disconnectClient(guid, "Failed to connect to upstream server", protocol::DisconnectFailReason::CantConnect);
+        disconnectClient(
+            guid,
+            i18n::tr("client.failed_upstream_connect", "Failed to connect to upstream server"),
+            protocol::DisconnectFailReason::CantConnect
+        );
         return;
     }
 
@@ -505,10 +557,14 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::NetworkSetting
     }
     bridge.mProxyClient.getSession().setCompressed(packet.mCompressionAlgorithm, packet.mCompressionThreshold);
     if (auto status = bridge.mConnectionRequest.selfSign(mProxyServerKeyPair); !status) [[unlikely]] {
-        getLogger().error("Failed to sign upstream login token: {}", status.error().message());
+        getLogger().error(i18n::tr(
+            "upstream.sign_login_token_failed",
+            "Failed to sign upstream login token: {0}",
+            status.error().message()
+        ));
         return disconnectClient(
             bridge.mRealGuid,
-            "Failed to sign upstream login token",
+            i18n::tr("upstream.sign_login_token_disconnect", "Failed to sign upstream login token"),
             protocol::DisconnectFailReason::BadPacket
         );
     }
@@ -533,7 +589,11 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ServerToClient
             bridge.mClientInfo.xuid.empty() ? "N/A" : bridge.mClientInfo.xuid,
             bridge.mClientInfo.pfid.empty() ? "N/A" : bridge.mClientInfo.pfid
         );
-        return disconnectClient(bridge.mRealGuid, "Invalid handshake token", protocol::DisconnectFailReason::BadPacket);
+        return disconnectClient(
+            bridge.mRealGuid,
+            i18n::tr("client.invalid_handshake_token", "Invalid handshake token"),
+            protocol::DisconnectFailReason::BadPacket
+        );
     }
 
     auto sessionKey = protocol::CryptoManager::computeSessionKey(
@@ -551,7 +611,7 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ServerToClient
         );
         return disconnectClient(
             bridge.mRealGuid,
-            "Failed to compute server session key",
+            i18n::tr("client.failed_server_session_key", "Failed to compute server session key"),
             protocol::DisconnectFailReason::BadPacket
         );
     }
@@ -564,12 +624,12 @@ void ProxyPass::handleServer(ProxyBridge& bridge, const protocol::ServerToClient
 }
 
 void ProxyPass::shutdown() {
-    getLogger().info("Shutting down proxy server...");
+    getLogger().info(i18n::tr("proxy.shutdown", "Shutting down proxy server..."));
     for (auto& [_, bridge] : mBridges) {
         if (bridge->mProxyClient.isConnected()) {
             protocol::DisconnectPacket disconnectPacket{};
             disconnectPacket.mReason  = protocol::DisconnectFailReason::Kicked;
-            disconnectPacket.mMessage = "Proxy server is shutting down";
+            disconnectPacket.mMessage = i18n::tr("client.proxy_shutdown", "Proxy server is shutting down");
             protocol::Session::Buffer buffer{};
             protocol::BinaryStream    stream{buffer};
             disconnectPacket.writeWithHeader(stream);
@@ -590,12 +650,13 @@ void ProxyPass::waitForStop() {
             shutdown();
             break;
         }
-        getLogger().error(
-            "Unknown command: {}. Please check that the command exists and that you have permission to use it.",
+        getLogger().error(i18n::tr(
+            "command.unknown",
+            "Unknown command: {0}. Please check that the command exists and that you have permission to use it.",
             command
-        );
+        ));
     }
-    getLogger().info("Proxy server stopped.");
+    getLogger().info(i18n::tr("proxy.stopped", "Proxy server stopped."));
 }
 
 } // namespace sculk

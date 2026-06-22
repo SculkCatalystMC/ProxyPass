@@ -5,12 +5,16 @@ on:
             - main
         paths:
             - src/**
+            - lang/**
+            - tools/**
             - CMakeLists.txt
     pull_request:
         branches:
             - main
         paths:
             - src/**
+            - lang/**
+            - tools/**
             - CMakeLists.txt
     workflow_dispatch:
 
@@ -29,6 +33,9 @@ jobs:
               uses: ilammy/msvc-dev-cmd@v1
               with:
                   arch: x64
+
+            - name: Check i18n catalogs
+              run: python tools/i18n_check.py
 
             - name: Configure
               run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=cl
@@ -50,7 +57,10 @@ jobs:
               uses: jwlawson/actions-setup-cmake@v2
 
             - name: Install Dependencies
-              run: apt-get update && apt-get install -y ninja-build cmake git openssl libssl-dev
+              run: apt-get update && apt-get install -y ninja-build cmake git openssl libssl-dev python3
+
+            - name: Check i18n catalogs
+              run: python3 tools/i18n_check.py
 
             - name: Configure
               run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release

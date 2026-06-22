@@ -1,0 +1,53 @@
+{
+  "locale": "en-US",
+  "fallback": "",
+  "messages": {
+    "proxy.starting": "Starting proxy server...",
+    "proxy.version": "Version: {0}(ProtocolVersion {1})",
+    "proxy.started": "Proxy server started in {0:.2f} seconds.",
+    "proxy.stopped": "Proxy server stopped.",
+    "proxy.shutdown": "Shutting down proxy server...",
+    "proxy.exiting_with_code": "Exiting program with error code {0}.",
+
+    "network.ipv4_supported": "IPv4 supported, port: {0}",
+    "network.ipv6_supported": "IPv6 supported, port: {0}",
+    "network.start_failed": "Failed to start proxy server.",
+    "network.port_in_use": "Port [{0}] may be in use by another process. Free up port and re-run program or adjust proxy_settings.jsonc file to use alternate ports for proxy server",
+
+    "auth.waiting_services": "Waiting for Minecraft services...",
+    "auth.services_failed": "Failed to connect to Minecraft services: {0}",
+
+    "command.unknown": "Unknown command: {0}. Please check that the command exists and that you have permission to use it.",
+
+    "client.invalid_connection_request": "Invalid connection request",
+    "client.connection_verification_failed": "Connection request verification failed",
+    "client.failed_generate_handshake_token": "Failed to generate handshake token",
+    "client.failed_compute_session_token": "Failed to compute client session token",
+    "client.failed_upstream_connect": "Failed to connect to upstream server",
+    "client.failed_bridge_init": "Failed to initialize proxy bridge",
+    "client.invalid_handshake_token": "Invalid handshake token",
+    "client.failed_server_session_key": "Failed to compute server session key",
+    "client.proxy_shutdown": "Proxy server is shutting down",
+
+    "crypto.server_key_pair_failed": "Failed to generate server key pair: {0}",
+    "proxy.callback_disconnect_failed": "Failed to set proxy server disconnect callback.",
+    "proxy.callback_packet_receive_failed": "Failed to set proxy server packet receive callback.",
+    "proxy.callback_packet_parse_failed": "Failed to set proxy server packet parse failure callback.",
+    "proxy.packet_parse_failed": "Failed to parse packet: {0}",
+    "upstream.callback_packet_receive_failed": "Failed to set upstream packet receive callback.",
+    "upstream.callback_packet_parse_failed": "Failed to set upstream packet parse failure callback.",
+    "upstream.callback_connected_failed": "Failed to set upstream connected callback.",
+    "upstream.callback_connection_failure_failed": "Failed to set upstream connection failure callback.",
+    "upstream.connect_player_failed": "Failed to connect to upstream server for player: {0}.",
+    "upstream.bridge_player_init_failed": "Failed to initialize proxy bridge for player: {0}.",
+    "upstream.sign_login_token_failed": "Failed to sign upstream login token: {0}",
+    "upstream.sign_login_token_disconnect": "Failed to sign upstream login token",
+
+    "i18n.created_lang_dir": "Created language directory: {0}",
+    "i18n.installed_builtin_catalog": "Installed builtin language catalog: {0}",
+    "i18n.catalog_parse_failed": "Failed to parse language catalog: {0}",
+    "i18n.catalog_incomplete": "Language catalog {0} is incomplete: {1} missing key(s).",
+    "i18n.missing_report_written": "Wrote missing translation report: {0}",
+    "i18n.placeholder_mismatch": "Placeholder mismatch in locale {0}, key {1}. Expected {2}, got {3}."
+  }
+}

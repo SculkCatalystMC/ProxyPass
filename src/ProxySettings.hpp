@@ -46,6 +46,32 @@ struct ProxySettings {
     );
     CONFIG(
         std::string,
+        language = "auto",
+        COMMENT(
+            "Display language. Use auto, en-US, zh-CN, or a custom locale file under lang/user.",
+            "显示语言。可使用 auto、en-US、zh-CN，或 lang/user 下的自定义语言文件。"
+        )
+    );
+    CONFIG(
+        bool,
+        i18n_auto_install = true,
+        COMMENT(
+            "Whether to automatically install default language files when missing.",
+            "语言文件缺失时是否自动安装默认语言文件。"
+        )
+    );
+    CONFIG(
+        bool,
+        i18n_check_completeness = true,
+        COMMENT("Whether to check language file completeness at startup.", "启动时是否检查语言文件完整性。")
+    );
+    CONFIG(
+        bool,
+        i18n_write_missing_report = true,
+        COMMENT("Whether to write missing translation reports into lang/user.", "是否将缺失翻译报告写入 lang/user。")
+    );
+    CONFIG(
+        std::string,
         upstream_host = "127.0.0.1",
         COMMENT(
             "Upstream server host, usually an IP or domain name, supports IPv4 and IPv6",
