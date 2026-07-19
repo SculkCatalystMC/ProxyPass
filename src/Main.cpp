@@ -18,6 +18,7 @@
 #include "ProxyPass.hpp"
 
 int main() {
+    sculk::ProxyPass::setWorkingDirectory();
     sculk::ProxyPass::initConsole();
     auto proxyPass = sculk::ProxyPass();
     if (!proxyPass.start()) {

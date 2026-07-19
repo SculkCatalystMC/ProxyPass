@@ -1,0 +1,8 @@
+services:
+  proxy:
+    container_name: SurvivalProxy
+    restart: unless-stopped
+    image: proxy
+    build: .
+    ports:
+      - 19134:19132/udp

@@ -71,3 +71,4 @@ vcpkg_installed/
 proxy_settings.jsonc
 /.vs
 /CMakeSettings.json
+.vscode

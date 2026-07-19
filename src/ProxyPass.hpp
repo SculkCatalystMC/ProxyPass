@@ -18,6 +18,9 @@
 #include "Logger.hpp"
 #include "ProxyBridge.hpp"
 #include "ProxySettings.hpp"
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <parallel_hashmap/phmap.h>
 #include <sculk/protocol/auth/AuthenticationKeyManager.hpp>
 #include <sculk/protocol/codec/actor/player/DisconnectFailReason.hpp>
@@ -39,6 +42,9 @@ class ProxyPass {
     protocol::PemKeyPair                                                              mProxyServerKeyPair{};
     std::unique_ptr<protocol::thread::ThreadPool>                                     mThreadPool{};
     std::unique_ptr<protocol::ServerNetworkSystem>                                    mProxyServer{};
+    std::mutex                                                                          mStopMutex{};
+    std::condition_variable                                                             mStopCv{};
+    std::atomic<bool>                                                                   mShouldStop{false};
 
 public:
     ProxyPass();
@@ -50,7 +56,11 @@ public:
 
     void shutdown();
 
+    void requestStop();
+
     void waitForStop();
+
+    static void setWorkingDirectory();
 
     static void initConsole();
 

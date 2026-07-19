@@ -16,8 +16,19 @@
 
 #include "ProxyPass.hpp"
 #include "Logger.hpp"
+#include <atomic>
+#include <climits>
+#include <cstdio>
+#include <csignal>
+#include <filesystem>
 #include <iostream>
 #include <print>
+#include <thread>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 #include <sculk/protocol/codec/MinecraftPackets.hpp>
 #include <sculk/protocol/codec/packet/ClientToServerHandshakePacket.hpp>
 #include <sculk/protocol/codec/packet/DisconnectPacket.hpp>
@@ -29,6 +40,46 @@
 #endif
 
 namespace sculk {
+
+namespace {
+    std::atomic<ProxyPass*> gProxyPassInstance{nullptr};
+
+    void proxyPassSignalHandler(int /*signum*/) {
+        if (auto* instance = gProxyPassInstance.load(std::memory_order_acquire)) {
+            instance->requestStop();
+        }
+    }
+}
+
+void ProxyPass::setWorkingDirectory() {
+    std::filesystem::path exePath;
+#ifdef _WIN32
+    wchar_t buffer[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, buffer, MAX_PATH) != 0) {
+        exePath = buffer;
+    }
+#else
+    char buffer[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (len != -1) {
+        buffer[len] = '\0';
+        exePath = buffer;
+    }
+#endif
+    if (exePath.empty()) {
+        return;
+    }
+
+    auto dir = exePath.parent_path();
+    for (int i = 0; i < 4 && !dir.empty(); ++i) {
+        if (std::filesystem::exists(dir / "proxy_settings.jsonc")) {
+            std::filesystem::current_path(dir);
+            return;
+        }
+        dir = dir.parent_path();
+    }
+    std::filesystem::current_path(exePath.parent_path());
+}
 
 void ProxyPass::initConsole() {
 #ifdef _WIN32
@@ -50,6 +101,8 @@ void ProxyPass::initConsole() {
     }
 #endif
     std::ios::sync_with_stdio(false);
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IOLBF, 0);
     std::print("\033]0;ProxyPass\007");
 }
 
@@ -412,6 +465,13 @@ void ProxyPass::handleFirstClientPacket(
                 return;
             }
 
+            getLogger().info(
+                "Upstream connection to {}:{} established for player: {}.",
+                mSettings.upstream_host,
+                mSettings.upstream_port,
+                currentBridge->mConnectionRequest.getXboxLiveName()
+            );
+
             if (!currentBridge->mClientReady.load(std::memory_order_acquire)) {
                 return;
             }
@@ -435,7 +495,9 @@ void ProxyPass::handleFirstClientPacket(
             }
 
             getLogger().info(
-                "Failed to connect to upstream server for player: {}.",
+                "Upstream connection to {}:{} failed for player: {}.",
+                mSettings.upstream_host,
+                mSettings.upstream_port,
                 currentBridge->mConnectionRequest.getXboxLiveName()
             );
             getLogger().info(
@@ -463,10 +525,17 @@ void ProxyPass::handleFirstClientPacket(
         return disconnectClient(guid, "Failed to initialize proxy bridge", protocol::DisconnectFailReason::Unknown);
     }
 
-    if (bridge->mProxyClient.connect(mSettings.upstream_host, mSettings.upstream_port)
-        != protocol::ClientNetworkSystem::ConnectionResult::ConnectionAttemptStarted) [[unlikely]] {
+    getLogger().info(
+        "Connecting to upstream server at {}:{} for player: {}.",
+        mSettings.upstream_host,
+        mSettings.upstream_port,
+        bridge->mConnectionRequest.getXboxLiveName()
+    );
+    auto connectResult = bridge->mProxyClient.connect(mSettings.upstream_host, mSettings.upstream_port);
+    if (connectResult != protocol::ClientNetworkSystem::ConnectionResult::ConnectionAttemptStarted) [[unlikely]] {
         getLogger().info(
-            "Failed to connect to upstream server for player: {}.",
+            "Failed to start upstream connection (result: {}) for player: {}.",
+            std::to_underlying(connectResult),
             bridge->mConnectionRequest.getXboxLiveName()
         );
         getLogger().info(
@@ -613,22 +682,40 @@ void ProxyPass::shutdown() {
     mThreadPool.reset();
 }
 
-void ProxyPass::waitForStop() {
-    std::string command{};
-    while (true) {
-        if (!(std::cin >> command)) {
-            break;
-        }
-        if (command == "stop") {
-            shutdown();
-            getLogger().info("Proxy server stopped.");
-            break;
-        }
-        getLogger().error(
-            "Unknown command: {}. Please check that the command exists and that you have permission to use it.",
-            command
-        );
+void ProxyPass::requestStop() {
+    if (!mShouldStop.exchange(true)) {
+        std::lock_guard<std::mutex> lock(mStopMutex);
+        mStopCv.notify_all();
     }
+}
+
+void ProxyPass::waitForStop() {
+    gProxyPassInstance.store(this, std::memory_order_release);
+    std::signal(SIGINT, proxyPassSignalHandler);
+    std::signal(SIGTERM, proxyPassSignalHandler);
+
+    std::thread inputThread([this]() {
+        std::string command{};
+        while (std::cin >> command) {
+            if (command == "stop") {
+                requestStop();
+                break;
+            }
+            getLogger().error(
+                "Unknown command: {}. Please check that the command exists and that you have permission to use it.",
+                command
+            );
+        }
+    });
+    inputThread.detach();
+
+    {
+        std::unique_lock<std::mutex> lock(mStopMutex);
+        mStopCv.wait(lock, [this] { return mShouldStop.load(); });
+    }
+
+    shutdown();
+    getLogger().info("Proxy server stopped.");
 }
 
 } // namespace sculk
